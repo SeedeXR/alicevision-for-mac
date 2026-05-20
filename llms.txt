@@ -1,0 +1,51 @@
+# alicevision-for-mac
+
+> Apple Silicon Metal port of AliceVision photogrammetry + Meshroom orchestration. CUDA-replaced-by-Metal end-to-end: 12 pipeline binaries (cameraInit through texturing) drive a native `av::gpu` Metal abstraction. End-to-end validated on the Monstree mini3 dataset (3 photos → textured 3D mesh). Includes a native SwiftUI Meshroom replacement at `meshroom-native/` (115 Swift tests passing, byte-identical UID hashing for Meshroom-Python interop) and a Python Meshroom integration path via `scripts/run_meshroom.sh`. ctest: 37/37 sequential. Release tarball staged at `build/release/`.
+
+## Documentation
+- [ARCHITECTURE.md](ARCHITECTURE.md): codebase tour — `av::gpu` + `av::depth_map` layering, upstream overlay model
+- [BUILD.md](BUILD.md): build prerequisites (macOS 14+, Xcode 26+, Homebrew), CMake invocation
+- [INSTALL_macOS.md](INSTALL_macOS.md): user-facing install guide and known limitations
+- [PORTING_NOTES.md](PORTING_NOTES.md): CUDA → Metal design log (FP64→FP32, UMA, mangling, shim policy)
+- [RELEASE.md](RELEASE.md): how to cut the redistributable tarball (`ninja package`)
+
+## Code overview
+- [src/](src/): native Metal sources — `av::gpu` abstraction, `av::depth_map` kernels, upstream adapter
+- [src/depth_map_metal/src/upstream_adapter.cpp](src/depth_map_metal/src/upstream_adapter.cpp): the CUDA-shim → Metal-kernel forwarder (12 `cuda_*` entrypoints)
+- [cmake/shims/aliceVision-includes/](cmake/shims/aliceVision-includes/): header shims that replace CUDA-using upstream headers
+- [cmake/shims/cuda-stubs/](cmake/shims/cuda-stubs/): CUDA-host-API typedef shims (`__half`, `float2`, `cudaStream_t`, …)
+- [third_party/lemon/](third_party/lemon/): vendored LEMON 1.3.1 graph library (Homebrew's `lemon` is unrelated)
+- [third_party/metal-cpp/](third_party/metal-cpp/): vendored Apple metal-cpp headers
+- [tests/](tests/): 38 ctest files — kernel correctness, end-to-end pipeline, shim conformance
+- [meshroom-native/](meshroom-native/): native SwiftUI Meshroom — `ProjectModel` + `App` modules, 115 tests
+- [meshroom-native/Sources/App/NodeUIDHasher.swift](meshroom-native/Sources/App/NodeUIDHasher.swift): byte-identical Meshroom-compatible UID hashing
+- [build/release/alicevision-for-mac-0.1.0-arm64.tar.gz](build/release/alicevision-for-mac-0.1.0-arm64.tar.gz): 15.4 MB release tarball (12 binaries + `default.metallib` + `share/aliceVision/`)
+- [scripts/run_meshroom.sh](scripts/run_meshroom.sh): drives Python Meshroom against our Apple Silicon binaries
+- [dataset_monstree/](dataset_monstree/): end-to-end smoke dataset (mini3, mini6, full variants)
+- [CMakeLists.txt](CMakeLists.txt): root build with Homebrew prefix wiring + `AV_BUILD_UPSTREAM_DEPTHMAP` switch
+
+## Pipeline binaries (`build/release/alicevision-for-mac-0.1.0/bin/`)
+- `aliceVision_cameraInit`, `aliceVision_featureExtraction`, `aliceVision_imageMatching`, `aliceVision_featureMatching`, `aliceVision_incrementalSfM`, `aliceVision_prepareDenseScene`, `aliceVision_depthMapEstimation`, `aliceVision_depthMapFiltering`, `aliceVision_meshing`, `aliceVision_meshFiltering`, `aliceVision_texturing`, `aliceVision_importMiddlebury`, plus `default.metallib`
+
+## Engineering memory (`memory/`)
+- [memory/session_start.md](memory/session_start.md): start here every session — current priorities + reading order
+- [memory/philosophy.md](memory/philosophy.md): engineering bedrock (UMA-first, no shallow fixes, Metal-native preferred)
+- [memory/project_context.md](memory/project_context.md): what/why/goals/constraints
+- [memory/mindmap.md](memory/mindmap.md): repo structure, CUDA-surface map, validated learnings
+- [memory/todo.md](memory/todo.md): phase status (Phases 0–15 complete, S47)
+- [memory/handover_session.md](memory/handover_session.md): per-session log
+- [memory/phase8_adapter_map.md](memory/phase8_adapter_map.md): adapter-by-adapter audit
+- [memory/phase11_meshroom_integration.md](memory/phase11_meshroom_integration.md): Meshroom-Python plumbing notes
+
+## Optional
+- [memory/perf_profile_s43.md](memory/perf_profile_s43.md): performance profiling baseline
+- [memory/perf_optimization_s44.md](memory/perf_optimization_s44.md): R1 perf optimization round (Gaussian, mipmap)
+- [memory/perf_optimization_s45.md](memory/perf_optimization_s45.md): R2+R3 perf optimizations (cumulative -18.5%)
+- [memory/adapter_audit_s41.md](memory/adapter_audit_s41.md): 12-forwarder adapter conformance audit
+- [memory/native_ui_design.md](memory/native_ui_design.md): SwiftUI Meshroom design doc
+- [memory/dataset_research.md](memory/dataset_research.md): Monstree + Middlebury dataset choices
+- [memory/full_dataset_run.md](memory/full_dataset_run.md): full Monstree pipeline timing
+- [memory/documentation_links.md](memory/documentation_links.md): curated external references
+- [memory/agent_profile.md](memory/agent_profile.md): how the AI agent operates on this repo
+- [instructions/instruction.md](instructions/instruction.md): engineering handbook (build, profile, sign, package)
+- [Formula/alicevision-for-mac.rb](Formula/alicevision-for-mac.rb): Homebrew formula draft

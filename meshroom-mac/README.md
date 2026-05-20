@@ -1,0 +1,141 @@
+# ![Meshroom - 3D Reconstruction Software](/docs/logo/banner-meshroom.png)
+
+Meshroom is an open-source, node-based visual programming framework—a flexible toolbox for creating, managing, and executing complex data processing pipelines.
+
+Meshroom uses a nodal system where each node represents a specific operation, and output attributes can seamlessly feed into subsequent steps. When a node’s attribute is modified, only the affected downstream nodes are invalidated, while cached intermediate results are reused to minimize unnecessary computation.
+
+Meshroom supports both local and distributed execution, enabling efficient parallel processing on render farms.
+It also includes interactive widgets for visualizing images and 3D data. Official releases come with built-in plugins for computer vision and machine learning tasks.
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/alicevision/Meshroom)
+[![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2997/badge)](https://bestpractices.coreinfrastructure.org/projects/2997)
+[![Build status](https://github.com/alicevision/Meshroom/actions/workflows/continuous-integration.yml/badge.svg?branch=develop)](https://github.com/alicevision/Meshroom/actions/workflows/continuous-integration.yml)
+
+
+# Get the project
+
+You can [download pre-compiled binaries for the latest release](https://github.com/alicevision/meshroom/releases).
+
+If you want to build it yourself, see [**INSTALL.md**](INSTALL.md) to setup the project and pre-requisites.
+
+To use Meshroom with custom plugins, see [**INSTALL_PLUGINS.md**](INSTALL_PLUGINS.md).
+
+
+# Concepts
+
+- **Graph**: A collection of interconnected nodes that defines the sequence of operations to represent your complete data processing workflow.
+- **Nodes**: The fundamental building blocks, each performing a specific task. Nodes are connected through edges that represent the flow of data between them.
+- **Attributes**: Parameters that control how each node behaves. When an attribute is modified, it triggers the invalidation of all connected downstream nodes while preserving cached intermediate results.
+- **Templates**: Ready-to-use pipeline configurations provided by plugins. You can customize existing templates or create and save your own.
+- **Local / Renderfarm**: Choose between local processing or distributed computation on render farms. You can monitor progress, review logs, track resource consumption, and use both modes simultaneously as Meshroom manages node locking during external computation.
+- **Custom Plugins**: Extend Meshroom's capabilities by creating your own nodes in Python or by integrating external command-line tools.
+
+
+# User Interface
+
+The Meshroom UI is divided into several key areas:
+ - **Graph Editor**: The central area where nodes are placed and connected to form a processing pipeline.
+ - **Node Editor**: It contains multiple tabs with:
+   - **Attributes**: Displays the attributes and parameters of the selected node.
+   - **Log**: Displays execution logs and error messages.
+   - **Statistics**: Displays resource consumption
+   - **Status**: Display some technical information on the node (workstation, start/end time, etc.)
+   - **Documentation**: Node Documentation.
+   - **Notes**: Change label or put some notes on the node to know why it’s used in this graph.
+ - **2D & 3D Viewer**: Visualizes the output of certain nodes.
+ - **Image Gallery**: Visualize the list of input files.
+
+
+# Manual and Tutorials
+ - [Meshroom Manual](https://meshroom-manual.readthedocs.io)
+ - [Meshroom FAQ](https://github.com/alicevision/meshroom/wiki)
+
+
+# Plugins bundled by default
+
+## AliceVision Plugin
+
+[AliceVision Website](http://alicevision.org)
+
+[AliceVision Repository](https://github.com/alicevision/AliceVision)
+
+AliceVision provides state-of-the-art 3D Computer Vision and Machine Learning algorithms that analyze and understand image content to transform collections of regular 2D photographs into detailed 3D models, camera positions, and scene geometry. Born from collaboration between academia and industry, it delivers research-grade algorithms with production-level robustness and quality.
+The AliceVision plugin offers comprehensive pipelines for:
+- **3D Reconstruction** from multi-view images ([pipeline overview](http://alicevision.github.io/#photogrammetry), [results on Sketchfab](http://sketchfab.com/AliceVision))
+- **Camera Tracking** for camera motion estimation
+- **HDR Fusion** from multi-bracketed photography
+- **Panorama Stitching** including fisheye support and motorized head systems
+- **Photometric Stereo** for geometric reconstruction from a single view with multiple lightings
+- **Multi-View Photometric Stereo** combining photogrammetry with photometric stereo
+
+
+## Segmentation Plugin
+
+[MrSegmentation](https://github.com/meshroomHub/mrSegmentation): A set of nodes for AI-powered image segmentation from natural language prompts. The plugin leverages foundation models to automatically identify and isolate specific objects or regions in images based on textual descriptions, enabling intuitive content-aware processing workflows.
+
+
+# Other plugins
+
+See [MeshroomHub](https://github.com/meshroomHub) for more plugins.
+
+## DepthEstimation Plugin
+
+[MrDepthEstimation](https://github.com/meshroomHub/mrDepthEstimation): A set of nodes for AI-based monocular depth estimation from image sequences. The plugin leverages deep learning models to predict depth information from single images, enabling depth estimation in new scenarios.
+
+
+## RoMa Plugin
+
+[MrRoma](https://github.com/meshroomHub/mrRoma): A set of nodes for RoMa (robust dense feature matching).
+The plugin leverages foundation models to provide pixel-dense correspondence estimation with reliable certainty maps, enabling robust matching even under extreme variations in scale, illumination, viewpoint, and texture.
+
+
+## GSplat Plugin
+
+[MrGSplat](https://github.com/meshroomHub/mrGSplat): A set of nodes for 3D Gaussian Splatting reconstruction. The plugin integrates seamlessly with AliceVision's photogrammetry pipeline, allowing users to create Gaussian splat representations from multi-view images and to render new viewpoints.
+
+
+## Research Plugin
+
+[Meshroom Research](https://github.com/meshroomHub/MeshroomResearch)
+A research-oriented plugin for evaluating and benchmarking cutting-edge Machine Learning algorithms in 3D Computer Vision. The plugin provides experimental nodes and evaluation frameworks to test new methodologies, compare algorithm performance, and validate research innovations before integration into production pipelines.
+
+
+## MicMac Plugin
+
+[MeshroomMicMac](https://github.com/alicevision/MeshroomMicMac)
+An exploratory plugin integrating MicMac's photogrammetric algorithms into Meshroom workflows. MicMac is a mature open-source photogrammetric software developed by the National Institute of Geographic and Forestry Information (French Mapping Agency, IGN) and the National School of Geographic Sciences (ENSG) within the LASTIG lab, offering specialized tools for surveying and mapping applications. While the plugin does not yet support Meshroom's full invalidation system, it provides fully functional pipelines for users seeking MicMac's specific photogrammetric capabilities.
+
+
+## Geolocation Plugin
+
+[MrGeolocation](https://github.com/meshroomHub/mrGeolocation)
+A plugin for geospatial integration that extracts GPS data from photographs and downloads contextual geographic information. The plugin automatically places 3D reconstructions within their real-world geographical environment by retrieving worldwide 2D maps (OpenStreetMap), global elevation models (NASA datasets), and high-resolution 3D Lidar models where available (France via IGN open data). This enables accurate georeferencing and contextual visualization of photogrammetric reconstructions.
+
+
+# License
+
+The project is released under MPLv2, see [**COPYING.md**](COPYING.md).
+
+
+# Citation
+  ```
+  @inproceedings{alicevision2021,
+    title={{A}liceVision {M}eshroom: An open-source {3D} reconstruction pipeline},
+    author={Carsten Griwodz and Simone Gasparini and Lilian Calvet and Pierre Gurdjos and Fabien Castan and Benoit Maujean and Gregoire De Lillo and Yann Lanthony},
+    booktitle={Proceedings of the 12th ACM Multimedia Systems Conference - {MMSys '21}},
+    doi = {10.1145/3458305.3478443},
+    publisher = {ACM Press},
+    year = {2021}
+  }
+  ```
+
+
+# Contributing
+We welcome contributions! Check out our [Contribution Guidelines](CONTRIBUTING.md) to get started. Whether you are a developer, designer, or documentation enthusiast, there is a place for you in the Meshroom community.
+
+
+# Contact
+
+Use the public mailing-list to ask questions or request features. It is also a good place for informal discussions like sharing results, interesting related technologies or publications: [forum@alicevision.org](https://groups.google.com/g/alicevision)
+
+You can also contact the core team privately on: [team@alicevision.org](mailto:team@alicevision.org).

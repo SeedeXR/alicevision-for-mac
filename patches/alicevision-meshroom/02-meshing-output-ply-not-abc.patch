@@ -1,0 +1,10 @@
+--- a/meshroom/aliceVision/Meshing.py	2026-05-18 01:59:14
++++ b/meshroom/aliceVision/Meshing.py	2026-05-20 13:30:34
+@@ -478,6 +478,6 @@
+             name="output",
+             label="Dense SfMData",
+             description="Output dense point cloud with visibilities (SfMData file format).",
+-            value="{nodeCacheFolder}/densePointCloud.abc",
++            value="{nodeCacheFolder}/densePointCloud.ply",
+         ),
+     ]

@@ -1,0 +1,20 @@
+--- a/meshroom/aliceVision/StructureFromMotion.py	2026-05-18 01:59:14
++++ b/meshroom/aliceVision/StructureFromMotion.py	2026-05-20 13:30:33
+@@ -349,7 +349,7 @@
+             name="interFileExtension",
+             label="Inter File Extension",
+             description="Extension of the intermediate file export.",
+-            value=".abc",
++            value=".ply",
+             values=[".abc", ".ply"],
+             invalidate=False,
+             advanced=True,
+@@ -376,7 +376,7 @@
+             name="output",
+             label="SfMData",
+             description="Path to the output SfM point cloud file (in SfMData format).",
+-            value="{nodeCacheFolder}/sfm.abc",
++            value="{nodeCacheFolder}/sfm.sfm",
+         ),
+         desc.File(
+             name="outputViewsAndPoses",

@@ -1,0 +1,32 @@
+From: AliceVision-for-Mac port <alex@bsa.ai>
+Subject: [PATCH] meshroom/__init__.py: add Darwin DYLD_FALLBACK_LIBRARY_PATH
+
+On macOS the dynamic loader honours DYLD_LIBRARY_PATH /
+DYLD_FALLBACK_LIBRARY_PATH, not LD_LIBRARY_PATH. The existing
+else-branch silently failed on Darwin when the AliceVision binaries
+were not built with an embedded @rpath. Add an explicit
+`sys.platform == "darwin"` branch that sets DYLD_FALLBACK_LIBRARY_PATH
+(preferred over DYLD_LIBRARY_PATH because it only kicks in when the
+loader cannot find the dylib via the binary's own install-name / rpath,
+so we do not override system frameworks).
+
+Our mac AliceVision build does encode @rpath install names, so in the
+common case this branch is a no-op safety net for users who unpack a
+prebuilt bundle into a non-standard location.
+
+--- a/meshroom/__init__.py
++++ b/meshroom/__init__.py
+@@ -200,6 +200,13 @@
+     addToEnvPath("PATH", os.environ.get("ALICEVISION_BIN_PATH", ""))
+     if sys.platform == "win32":
+         addToEnvPath("PATH", os.environ.get("ALICEVISION_LIBPATH", ""))
++    elif sys.platform == "darwin":
++        # macOS: dyld honours DYLD_FALLBACK_LIBRARY_PATH. Prefer fallback over
++        # DYLD_LIBRARY_PATH so we do not shadow system frameworks; this only
++        # kicks in when the binary's own @rpath / install-name cannot resolve
++        # the dylib. The mac AliceVision build embeds @rpath, so this is a
++        # safety net for relocated bundles.
++        addToEnvPath("DYLD_FALLBACK_LIBRARY_PATH", os.environ.get("ALICEVISION_LIBPATH", ""))
+     else:
+         addToEnvPath("LD_LIBRARY_PATH", os.environ.get("ALICEVISION_LIBPATH", ""))
+ 

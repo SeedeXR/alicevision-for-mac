@@ -1,0 +1,313 @@
+#!/usr/bin/env python
+import argparse
+import json
+import logging
+import os
+import re
+import sys
+
+import meshroom.core.graph
+from meshroom.common import strtobool
+from meshroom import setupEnvironment, logStringToPython
+
+def parseInitInputs(inputs: list[str]) -> dict[str, str]:
+    """Utility method for parsing the input and inputRecursive arguments.
+    Args:
+        inputs: Command line values in format 'nodeName=value' or just 'value' to set it on all init nodes
+
+    Returns:
+        Dict mapping node names (or empty string if it applies to all) to their input values
+
+    Raises:
+        ValueError: If input format is invalid
+    """
+    mapInputs = {}
+    for inp in inputs:
+        # Stop after the first occurrence
+        inputGroup = inp.split('=', 1)
+        nodeName = inputGroup[0] if len(inputGroup) == 2 else ""
+        nodeInputs = inputGroup[-1].split(',')
+        mapInputs[nodeName] = [os.path.abspath(path) for path in nodeInputs]
+    return mapInputs
+
+
+setupEnvironment()
+
+meshroom.core.initPipelines()
+
+parser = argparse.ArgumentParser(
+    prog='meshroom_batch',
+    description='Launch a Meshroom pipeline from command line.',
+    add_help=True,
+    formatter_class=argparse.RawTextHelpFormatter,
+    epilog='''
+Examples:
+  1. Process a pipeline in command line:
+     meshroom_batch -p cameraTracking -i /input/path -o /output/path -s /path/to/store/the/project.mg
+
+  2. Submit a pipeline on renderfarm:
+     meshroom_batch -p cameraTracking -i /input/path -o /output/path -s /path/to/store/the/project.mg --submit
+
+  See "meshroom_compute -h" to compute an existing project from command line.
+
+Additional Resources:
+  Website:      https://alicevision.org
+  Manual:       https://meshroom-manual.readthedocs.io
+  Forum:        https://groups.google.com/g/alicevision
+  Tutorials:    https://www.youtube.com/c/AliceVisionOrg
+  Contribute:   https://github.com/alicevision/Meshroom
+''')
+
+
+general_group = parser.add_argument_group('General Options')
+general_group.add_argument(
+    '-i', '--input', 
+    metavar='FILE FOLDER NODEINSTANCE=FILE,FOLDER,...', 
+    type=str,
+    nargs='*',
+    default=[],
+    help='Input files and folders to process. '
+         'When multiple Init Nodes exist in the pipeline, inputs are applied to all by default. '
+         'To target a specific Init Node, use the format Node1=input1,input2 Node2=input3')
+
+general_group.add_argument(
+    '-I', '--inputRecursive',
+    metavar='FOLDER FOLDER_2 NODEINSTANCE=FOLDER,FOLDER_2,...',
+    type=str,
+    nargs='*',
+    default=[],
+    help='Recursively scan these directories for input files.')
+
+general_group.add_argument(
+    '-p', '--pipeline',
+    metavar='FILE.mg / PIPELINE',
+    type=str,
+    default=os.environ.get('MESHROOM_DEFAULT_PIPELINE', 'photogrammetry'),
+    help='Template pipeline among those listed or a Meshroom file containing a custom pipeline '
+         'to run on input images:\n' +
+         '\n'.join(['    - ' + p for p in meshroom.core.pipelineTemplates]))
+
+general_group.add_argument(
+    '-o', '--output', 
+    metavar='FOLDER COPYFILES_INSTANCE=FOLDER',
+    type=str,
+    required=False,
+    nargs='*',
+    help='Output folder for copying results. '
+         'Sets output folder for all CopyFiles nodes, or target specific nodes using COPYFILES_INSTANCE=FOLDER.')
+
+general_group.add_argument(
+    '-s', '--save', metavar='FILE', type=str, required=False,
+    help='Save the configured Meshroom graph to a project file. It will setup the cache folder accordingly. ')
+
+general_group.add_argument(
+    '--submit', help='Submit on renderfarm instead of local computation.',
+    action='store_true')
+
+general_group.add_argument(
+    '-v', '--verbose',
+    help='Set the verbosity level for logging:\n'
+         '  - fatal: Show only critical errors.\n'
+         '  - error: Show errors only.\n'
+         '  - warning: Show warnings and errors.\n'
+         '  - info: Show standard informational messages.\n'
+         '  - debug: Show detailed debug information.\n'
+         '  - trace: Show all messages, including trace-level details.',
+    default=os.environ.get('MESHROOM_VERBOSE', 'warning'),
+    choices=['fatal', 'error', 'warning', 'info', 'debug', 'trace'])
+
+advanced_group = parser.add_argument_group('Advanced Options')
+advanced_group.add_argument(
+    '--overrides', metavar='SETTINGS', type=str, default=None,
+    help='A JSON file containing the graph parameters override.')
+
+advanced_group.add_argument(
+    '--paramOverrides', metavar='NODETYPE:param=value NODEINSTANCE.param=value', type=str, default=None, nargs='*',
+    help='Override specific parameters directly from the command line (by node type or by node names).')
+
+advanced_group.add_argument(
+    '--setInvalidationString', metavar='STRING', type=str, 
+    help='Set an invalidation string on ALL nodes.')
+
+advanced_group.add_argument(
+    '--compute', metavar='<yes/no>', type=lambda x: bool(strtobool(x)), default=True, required=False,
+    help='You can set it to <no/false/0> to disable the computation.')
+
+advanced_group.add_argument(
+    '--toNode', metavar='NODE', type=str, nargs='*',
+    default=None,
+    help='Process the node(s) with its dependencies.')
+
+advanced_group.add_argument(
+    '--forceStatus', help='Force computation if status is RUNNING or SUBMITTED.',
+    action='store_true')
+advanced_group.add_argument(
+    '--forceCompute', help='Compute in all cases even if already computed.',
+    action='store_true')
+
+advanced_group.add_argument(
+    "--submitLabel",
+    type=str,
+    default=os.environ.get('MESHROOM_SUBMIT_LABEL', '[Meshroom] {projectName}'),
+    help="Label of a node when submitted on renderfarm.")
+
+advanced_group.add_argument(
+    '--submitter',
+    type=str,
+    default='Tractor',
+    help='Execute job with a specific submitter.')
+
+args = parser.parse_args()
+
+logging.getLogger().setLevel(logStringToPython[args.verbose])
+
+meshroom.core.initPlugins()
+meshroom.core.initNodes()
+
+graph = meshroom.core.graph.Graph(name=args.pipeline)
+
+with meshroom.core.graph.GraphModification(graph):
+    # initialize template pipeline
+    loweredPipelineTemplates = {k.lower(): v for k, v in meshroom.core.pipelineTemplates.items()}
+    if args.pipeline.lower() in loweredPipelineTemplates:
+        graph.initFromTemplate(loweredPipelineTemplates[args.pipeline.lower()],
+                               copyOutputs=True if args.output else False)
+    else:
+        # custom pipeline
+        graph.initFromTemplate(args.pipeline, copyOutputs=True if args.output else False)
+
+    # Set invalidation string
+    if args.setInvalidationString:
+        nodes, _ = graph.dfsOnFinish()
+        for node in nodes:
+            if node.isComputableType:
+                node.setInternalAttributeValues({"invalidation": args.setInvalidationString})
+
+    if args.input:
+        # get init nodes
+        initNodes = graph.findInitNodes()
+        initNodesNames = [n.getName() for n in initNodes]
+
+        # parse inputs for each init node
+        mapInput = parseInitInputs(args.input)
+
+        # parse recursive inputs for each init node
+        mapInputRecursive = parseInitInputs(args.inputRecursive)
+
+        # check that input nodes exist in the pipeline template
+        for nodeName in mapInput.keys() | mapInputRecursive.keys():
+            if nodeName and nodeName not in initNodesNames:
+                raise RuntimeError(f"Failed to find the Init Node '{nodeName}' in your pipeline.\nAvailable Init Nodes: {initNodesNames}")
+
+        # feed inputs (recursive and non-recursive paths) to corresponding init nodes
+        for initNode in initNodes:
+            nodeName = initNode.getName()
+            if nodeName not in mapInput | mapInputRecursive and \
+               "" not in mapInput | mapInputRecursive:
+                continue
+
+            # Retrieve input per node and inputs for all init node types
+            input = mapInput.get(nodeName, []) + mapInput.get("", [])
+            # Retrieve recursive inputs
+            inputRec = mapInputRecursive.get(nodeName, []) + mapInputRecursive.get("", [])
+            initNode.nodeDesc.initialize(initNode, input, inputRec)
+
+    if not graph.canComputeLeaves:
+        raise RuntimeError("Graph cannot be computed. Check for compatibility issues.")
+
+    if args.verbose:
+        graph.setVerbose(args.verbose)
+
+    if args.output:
+        # The output folders for CopyFiles nodes can be set as follows:
+        # - for each node, the output folder is specified following the
+        #   "CopyFiles_name=/output/folder/path" convention.
+        # - a path is provided without specifying which CopyFiles node should be set with it:
+        #   all the CopyFiles nodes will be set with it.
+        # - some CopyFiles nodes have their path specified, and another path is provided
+        #   without specifying a node: all CopyFiles nodes with dedicated will have their own
+        #   output folders set, and those which have not been specified will be set with the
+        #   other path.
+        # - some CopyFiles nodes have their output folder specified while others do not: all
+        #   the nodes with specified folders will use the provided values, and those without
+        #   any will be set with the output folder of the first specified CopyFiles node.
+        # - several output folders are provided without specifying any node: the last one will
+        #   be used to set all the CopyFiles nodes' output folders.
+
+        # Check that there is at least one CopyFiles node
+        copyNodes = graph.nodesOfType('CopyFiles')
+        if len(copyNodes) == 0:
+            raise RuntimeError('meshroom_batch requires a pipeline graph with at least ' +
+                               'one CopyFiles node, none found.')
+
+        reExtract = re.compile(r'(\w+)=(.*)')  # NodeName=value
+        globalCopyPath = ''
+        for p in args.output:
+            result = reExtract.match(p)
+            if not result:  # If the argument is only a path, set it for the global path
+                globalCopyPath = p
+                continue
+
+            node, value = result.groups()
+            for i, n in enumerate(copyNodes):  # Find the correct CopyFiles node in the list
+                if n.name == node:  # If found, set the value, and remove it from the list
+                    n.output.value = value
+                    copyNodes.pop(i)
+                    if globalCopyPath == '':  # Fallback in case some nodes would have no path
+                        globalCopyPath = value
+                    break
+
+        for n in copyNodes:  # Set the remaining CopyPath nodes with the global path
+            n.output.value = globalCopyPath
+    elif args.submit or args.compute:
+        print(f'No output set, results will be available in the cache folder: "{graph.cacheDir}"')
+
+    if args.overrides:
+        with open(args.overrides, encoding='utf-8', errors='ignore') as f:
+            data = json.load(f)
+            for nodeName, overrides in data.items():
+                for attrName, value in overrides.items():
+                    graph.findNode(nodeName).attribute(attrName).value = value
+
+    if args.paramOverrides:
+        print("\n")
+        reExtract = re.compile(r'(\w+)([:.])(\w[\w.]*)=(.*)')
+        for p in args.paramOverrides:
+            result = reExtract.match(p)
+            if not result:
+                raise ValueError('Invalid param override: ' + str(p))
+            node, t, param, value = result.groups()
+            if t == ':':
+                nodesOfType = graph.nodesOfType(node)
+                if not nodesOfType:
+                    raise ValueError(f'No node with the type "{node}" in the scene.')
+                for n in nodesOfType:
+                    print(f'Overrides {node}.{param}={value}')
+                    n.attribute(param).value = value
+            elif t == '.':
+                print(f'Overrides {node}.{param}={value}')
+                graph.findNode(node).attribute(param).value = value
+            else:
+                raise ValueError('Invalid param override: ' + str(p))
+        print("\n")
+
+if args.save:
+    graph.save(args.save)
+    print(f'File successfully saved: "{args.save}"')
+
+# find end nodes (None will compute all graph)
+toNodes = graph.findNodes(args.toNode) if args.toNode else None
+
+if args.submit:
+    meshroom.core.initSubmitters()
+    if not args.save:
+        raise ValueError('Need to save the project to file to submit on renderfarm.')
+    # submit on renderfarm
+    meshroom.core.graph.submit(args.save, args.submitter, toNode=args.toNode,
+                               submitLabel=args.submitLabel)
+elif args.compute:
+    # find end nodes (None will compute all graph)
+    toNodes = graph.findNodes(args.toNode) if args.toNode else None
+    # start computation
+    meshroom.core.graph.executeGraph(graph, toNodes=toNodes, forceCompute=args.forceCompute,
+                                     forceStatus=args.forceStatus)

@@ -1,0 +1,45 @@
+#pragma once
+
+// alicevision-for-mac override of upstream's src/cmake/config.hpp.in.
+//
+// We mirror upstream's template verbatim, then APPEND any new feature flags
+// the mac port introduces. upstream/ is read-only (reference clone), so we
+// keep our additions in this file and feed it to `configure_file` from our
+// root CMakeLists.txt instead of the upstream template.
+//
+// Diff vs upstream/src/cmake/config.hpp.in:
+//   + ALICEVISION_HAVE_DEPTHMAP (Phase 9, S31): set when CUDA OR Metal
+//     backend is present AND the host-side depthMap module is being built.
+//     Allows depthMap consumers to gate on the *capability* rather than on
+//     the (CUDA-only upstream) backend identity.
+
+/// Function used to safely check defines
+#define ALICEVISION_IS_DEFINED(F) F() == 1
+
+#define ALICEVISION_HAVE_OPENMP() @ALICEVISION_HAVE_OPENMP@
+
+#define ALICEVISION_HAVE_SSE() @ALICEVISION_HAVE_SSE@
+
+#define ALICEVISION_HAVE_MOSEK() @ALICEVISION_HAVE_MOSEK@
+
+#define ALICEVISION_HAVE_OPENCV() @ALICEVISION_HAVE_OPENCV@
+
+#define ALICEVISION_HAVE_OCVSIFT() @ALICEVISION_HAVE_OCVSIFT@
+
+#define ALICEVISION_HAVE_ALEMBIC() @ALICEVISION_HAVE_ALEMBIC@
+
+#define ALICEVISION_HAVE_USD() @ALICEVISION_HAVE_USD@
+
+#define ALICEVISION_HAVE_CCTAG() @ALICEVISION_HAVE_CCTAG@
+
+#define ALICEVISION_HAVE_APRILTAG() @ALICEVISION_HAVE_APRILTAG@
+
+#define ALICEVISION_HAVE_POPSIFT() @ALICEVISION_HAVE_POPSIFT@
+
+#define ALICEVISION_HAVE_CUDA() @ALICEVISION_HAVE_CUDA@
+
+#define ALICEVISION_HAVE_ONNX() @ALICEVISION_HAVE_ONNX@
+
+#define ALICEVISION_HAVE_ONNX_GPU() @ALICEVISION_HAVE_ONNX_GPU@
+
+#define ALICEVISION_HAVE_DEPTHMAP() @ALICEVISION_HAVE_DEPTHMAP@

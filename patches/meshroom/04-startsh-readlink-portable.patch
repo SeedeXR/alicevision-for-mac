@@ -1,0 +1,27 @@
+From: AliceVision-for-Mac port <alex@bsa.ai>
+Subject: [PATCH] start.sh: portable realpath (drop GNU `readlink -f`)
+
+macOS ships BSD readlink, which does not accept `-f`. The original line:
+
+    export MESHROOM_ROOT="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" )" )"
+
+errors out on Darwin with "readlink: illegal option -- f".
+
+Use a Python one-liner via `os.path.realpath` for portability. python3
+is a hard prerequisite of Meshroom (the very next non-comment line
+invokes `python3 "$MESHROOM_ROOT/meshroom/ui"`), so this adds no new
+dependency. The Python invocation correctly resolves symlinks in every
+path component, matching `readlink -f` semantics on GNU coreutils.
+
+--- a/start.sh
++++ b/start.sh
+@@ -1,5 +1,8 @@
+ #!/bin/bash
+-export MESHROOM_ROOT="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" )" )"
++# Portable realpath: macOS BSD readlink lacks -f. python3 is required
++# by the next line anyway, so we reuse it here. Matches `readlink -f`
++# semantics on Linux (resolves symlinks in every path component).
++export MESHROOM_ROOT="$(dirname "$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")"
+ export PYTHONPATH=$MESHROOM_ROOT:$PYTHONPATH
+ 
+ # using existing alicevision release

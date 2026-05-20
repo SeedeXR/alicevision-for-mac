@@ -1,0 +1,217 @@
+from enum import Enum, IntEnum
+import logging
+import os
+import sys
+from pathlib import Path
+
+
+class VersionStatus(Enum):
+    release = 1
+    develop = 2
+
+
+__version__ = "2026.1.0"
+# Always increase the minor version when switching from release to develop.
+__version_status__ = VersionStatus.develop
+
+if __version_status__ is VersionStatus.develop:
+    __version__ += "+" + __version_status__.name
+
+__version_label__ = __version__
+# Modify version label if we are in a development phase.
+if __version_status__ is VersionStatus.develop:
+
+    scriptPath = os.path.dirname(os.path.abspath(__file__))
+    headFilepath = os.path.join(scriptPath, "../.git/HEAD")
+    if os.path.exists(headFilepath):
+        # Add git branch name, if it is a git repository
+        with open(headFilepath, "r") as headFile:
+            data = headFile.readlines()
+            branchName = data[0].split('/')[-1].strip()
+            __version_label__ += " branch=" + branchName
+
+    # Allow override from env variable
+    if "REZ_MESHROOM_VERSION" in os.environ:
+        __version_label__ += " package=" + os.environ.get("REZ_MESHROOM_VERSION")
+
+
+_MESHROOM_ROOT = Path(__file__).parent.parent.resolve()
+
+
+# Internal imports after the definition of the version
+from .common import init, Backend, strtobool
+
+# sys.frozen is initialized by cx_Freeze and identifies a release package
+isFrozen = getattr(sys, "frozen", False)
+
+useMultiChunks = bool(strtobool(os.environ.get("MESHROOM_USE_MULTI_CHUNKS", "True")))
+
+
+# Logging
+def addTraceLevel():
+    """ From https://stackoverflow.com/a/35804945 """
+    levelName, methodName, levelNum = 'TRACE', 'trace', logging.DEBUG - 5
+    if hasattr(logging, levelName) or hasattr(logging, methodName)or hasattr(logging.getLoggerClass(), methodName):
+        return
+
+    def logForLevel(self, message, *args, **kwargs):
+        if self.isEnabledFor(levelNum):
+            self._log(levelNum, message, args, **kwargs)
+
+    def logToRoot(message, *args, **kwargs):
+        logging.log(levelNum, message, *args, **kwargs)
+
+    logging.addLevelName(levelNum, levelName)
+    setattr(logging, levelName, levelNum)
+    setattr(logging.getLoggerClass(), methodName, logForLevel)
+    setattr(logging, methodName, logToRoot)
+
+
+addTraceLevel()
+logStringToPython = {
+    'fatal': logging.CRITICAL,
+    'error': logging.ERROR,
+    'warning': logging.WARNING,
+    'info': logging.INFO,
+    'debug': logging.DEBUG,
+    'trace': logging.TRACE,
+}
+logging.getLogger().setLevel(logStringToPython[os.environ.get('MESHROOM_VERBOSE', 'warning')])
+
+
+class MeshroomExitStatus(IntEnum):
+    """ In case we want to catch some special case from the parent process
+    We could use 3-125 for custom exist codes :
+    https://tldp.org/LDP/abs/html/exitcodes.html
+    """
+    SUCCESS = 0
+    ERROR = 1
+    # In some farm tools jobs are automatically re-tried, using ERROR_NO_RETRY will try to prevent that
+    ERROR_NO_RETRY = -999  # It's actually -999 % 256 => 25
+
+
+def setupEnvironment(backend=Backend.STANDALONE):
+    """
+    Setup environment for Meshroom to work in a prebuilt, standalone configuration.
+
+    Use 'MESHROOM_INSTALL_DIR' to simulate standalone configuration with a path to a Meshroom installation folder.
+
+    # Meshroom standalone structure
+
+    - Meshroom/
+       - aliceVision/
+           - bin/    # runtime bundled binaries (windows: exe + libs, unix: executables)
+           - lib/    # runtime bundled libraries (unix: libs)
+           - share/  # resource files
+               - aliceVision/
+                   - COPYING.md         # AliceVision COPYING file
+                   - cameraSensors.db   # sensor database
+                   - vlfeat_K80L3.tree  # voctree file
+       - lib/      # Python lib folder
+       - qtPlugins/
+       - plugins/
+       Meshroom    # main executable
+       COPYING.md  # Meshroom COPYING file
+    """
+
+    init(backend)
+
+    def addToEnvPath(var, val, index=-1):
+        """
+        Add paths to the given environment variable.
+
+        Args:
+            var (str): the name of the variable to add paths to
+            val (str or list of str): the path(s) to add
+            index (int): insertion index
+        """
+        if not val:
+            return
+
+        paths = os.environ.get(var, "").split(os.pathsep)
+
+        if not isinstance(val, (list, tuple)):
+            val = [val]
+
+        if index == -1:
+            paths.extend(val)
+        elif index == 0:
+            paths = val + paths
+        else:
+            raise ValueError("addToEnvPath: index must be -1 or 0.")
+        os.environ[var] = os.pathsep.join(paths)
+
+    # setup root directory (override possible by setting "MESHROOM_INSTALL_DIR" environment variable)
+    rootDir = os.path.dirname(sys.executable) if isFrozen else os.environ.get("MESHROOM_INSTALL_DIR", None)
+    logging.debug(f"isFrozen={isFrozen}")
+    logging.debug(f"sys.executable={sys.executable}")
+    logging.debug(f"rootDir={rootDir}")
+
+    if rootDir:
+        os.environ["MESHROOM_INSTALL_DIR"] = rootDir
+
+        aliceVisionDir = os.path.join(rootDir, "aliceVision")
+        # default directories
+        aliceVisionBinDir = os.path.join(aliceVisionDir, "bin")
+        aliceVisionShareDir = os.path.join(aliceVisionDir, "share", "aliceVision")
+        qtPluginsDir = os.path.join(rootDir, "qtPlugins")
+        pluginsDir = os.path.join(rootDir, "plugins")
+        sensorDBPath = os.path.join(aliceVisionShareDir, "cameraSensors.db")
+        voctreePath = os.path.join(aliceVisionShareDir, "vlfeat_K80L3.SIFT.tree")
+        sphereDetectionModel = os.path.join(aliceVisionShareDir, "sphereDetection_Mask-RCNN.onnx")
+        semanticSegmentationModel = os.path.join(aliceVisionShareDir, "fcn_resnet50.onnx")
+        colorChartDetectionModelFolder = os.path.join(aliceVisionShareDir, "ColorChartDetectionModel")
+
+        env = {
+            "PATH": aliceVisionBinDir,
+            "QT_PLUGIN_PATH": [qtPluginsDir],
+            "QML2_IMPORT_PATH": [os.path.join(qtPluginsDir, "qml")]
+        }
+
+        for key, value in env.items():
+            logging.debug(f"Add to {key}: {value}")
+            addToEnvPath(key, value, 0)
+
+        # Add all available plugins
+        if os.path.exists(pluginsDir):
+            subfolders = [f.path for f in os.scandir(pluginsDir) if f.is_dir()]
+            for plugin in subfolders:
+                addToEnvPath("MESHROOM_PLUGINS_PATH", plugin, 0)
+
+        variables = {
+            "ALICEVISION_ROOT": aliceVisionDir,
+            "ALICEVISION_SENSOR_DB": sensorDBPath,
+            "ALICEVISION_VOCTREE": voctreePath,
+            "ALICEVISION_SPHERE_DETECTION_MODEL": sphereDetectionModel,
+            "ALICEVISION_SEMANTIC_SEGMENTATION_MODEL": semanticSegmentationModel,
+            "ALICEVISION_COLORCHARTDETECTION_MODEL_FOLDER": colorChartDetectionModelFolder
+        }
+
+        for key, value in variables.items():
+            if key not in os.environ and os.path.exists(value):
+                logging.debug(f"Set {key}: {value}")
+                os.environ[key] = value
+
+        # Add nodes and templates from AliceVision
+        aliceVisionPluginDir = os.path.join(aliceVisionDir, "share", "meshroom")
+        addToEnvPath("MESHROOM_NODES_PATH", aliceVisionPluginDir)
+        addToEnvPath("MESHROOM_PIPELINE_TEMPLATES_PATH", aliceVisionPluginDir)
+
+    addToEnvPath("PATH", os.environ.get("ALICEVISION_BIN_PATH", ""))
+    if sys.platform == "win32":
+        addToEnvPath("PATH", os.environ.get("ALICEVISION_LIBPATH", ""))
+    elif sys.platform == "darwin":
+        # macOS: dyld honours DYLD_FALLBACK_LIBRARY_PATH. Prefer fallback over
+        # DYLD_LIBRARY_PATH so we do not shadow system frameworks; this only
+        # kicks in when the binary's own @rpath / install-name cannot resolve
+        # the dylib. The mac AliceVision build embeds @rpath, so this is a
+        # safety net for relocated bundles.
+        addToEnvPath("DYLD_FALLBACK_LIBRARY_PATH", os.environ.get("ALICEVISION_LIBPATH", ""))
+    else:
+        addToEnvPath("LD_LIBRARY_PATH", os.environ.get("ALICEVISION_LIBPATH", ""))
+
+
+os.environ["QML_XHR_ALLOW_FILE_READ"] = '1'
+os.environ["QML_XHR_ALLOW_FILE_WRITE"] = '1'
+os.environ["PYSEQ_STRICT_PAD"] = '1'
+os.environ["QSG_RHI_BACKEND"] = "opengl"

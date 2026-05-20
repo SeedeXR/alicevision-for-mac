@@ -1,0 +1,62 @@
+From: AliceVision-for-Mac port <alex@bsa.ai>
+Subject: [PATCH] meshroom/core/cgroup.py: macOS sysctl branch
+
+cgroup is a Linux concept; the existing code reads /proc/<pid>/cgroup
+and /sys/fs/cgroup, neither of which exist on macOS, so both functions
+fall through to the OSError except clause and return -1. The caller
+treats -1 as "no limit", which is *almost* right -- on Darwin the real
+answer is "no cgroup-style container limit, ask the kernel directly
+via sysctl".
+
+This patch short-circuits the Linux probes when sys.platform ==
+"darwin" and returns the true hardware values via `sysctl hw.memsize`
+and `sysctl hw.ncpu`. Both functions still return -1 on any unexpected
+failure, preserving the original "unlimited" contract for the caller.
+
+--- a/meshroom/core/cgroup.py
++++ b/meshroom/core/cgroup.py
+@@ -1,11 +1,32 @@
+ #!/usr/bin/env python
+ 
+ import os
++import subprocess
++import sys
+ 
+ 
++def _darwinSysctlInt(name):
++    """
++    Query a sysctl key on Darwin and return its integer value, or -1 if
++    the call fails. Used to surface the true hardware memory / CPU count
++    on macOS where cgroup files do not exist.
++    """
++    try:
++        out = subprocess.check_output(
++            ["sysctl", "-n", name], stderr=subprocess.DEVNULL, timeout=2
++        ).decode("utf-8", errors="replace").strip()
++        return int(out) if out.lstrip("-").isdigit() else -1
++    except (OSError, subprocess.SubprocessError, ValueError):
++        return -1
++
++
+ # Try to retrieve limits of memory for the current process' cgroup
+ def getCgroupMemorySize():
+ 
++    if sys.platform == "darwin":
++        # No cgroups on macOS; report the physical memory budget instead.
++        return _darwinSysctlInt("hw.memsize")
++
+     # First of all, get pid of process
+     pid = os.getpid()
+ 
+@@ -63,6 +84,11 @@
+ # Try to retrieve limits of cores for the current process' cgroup
+ def getCgroupCpuCount():
+ 
++    if sys.platform == "darwin":
++        # No cgroups on macOS; report the logical CPU count via sysctl.
++        # hw.ncpu = hw.logicalcpu on Apple Silicon (perf + efficiency cores).
++        return _darwinSysctlInt("hw.ncpu")
++
+     # First of all, get pid of process
+     pid = os.getpid()
+ 

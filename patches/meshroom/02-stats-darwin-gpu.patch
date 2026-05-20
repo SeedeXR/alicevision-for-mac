@@ -1,0 +1,83 @@
+From: AliceVision-for-Mac port <alex@bsa.ai>
+Subject: [PATCH] meshroom/core/stats.py: Apple Silicon GPU stats via system_profiler
+
+The existing GPU stats path unconditionally invokes nvidia-smi (it's
+set to the literal string "nvidia-smi" in the non-Windows else-branch).
+On Darwin / Apple Silicon there is no nvidia-smi, and the Metal driver
+does not expose a per-process query for GPU utilization comparable to
+NVML.
+
+Trade-off decision (documented in code below):
+  - psutil.virtual_memory() already captures unified-memory accounting,
+    so memory pressure is observable via the existing ramUsage curve;
+    a separate gpuMemoryUsed curve would just duplicate it.
+  - system_profiler SPDisplaysDataType is the simplest dep-free source
+    of the GPU name and the static VRAM string Apple reports. It is
+    slow (~1-2 s) so we call it once in initOnFirstTime and cache.
+  - For live MTLDevice.recommendedMaxWorkingSetSize /
+    currentAllocatedSize we would need pyobjc-framework-Metal or a
+    cffi shim. Deferred until a real need surfaces; the depth-map
+    stage logs its own per-allocation Metal memory anyway.
+  - GPU utilization / temperature: no Apple-shipped CLI exposes these
+    without root. Skip the curves on Darwin rather than fake them.
+
+--- a/meshroom/core/stats.py
++++ b/meshroom/core/stats.py
+@@ -40,6 +40,7 @@
+         self.gpuName = ''
+         self.curves = defaultdict(list)
+         self.nvidia_smi = None
++        self._darwinGpuProbed = False
+         self._isInit = False
+ 
+     def initOnFirstTime(self):
+@@ -60,9 +61,49 @@
+                 default_nvidia_smi = f"{os.environ['systemdrive']}\\Program Files\\NVIDIA Corporation\\NVSMI\\nvidia-smi.exe"
+                 if os.path.isfile(default_nvidia_smi):
+                     self.nvidia_smi = default_nvidia_smi
++        elif platform.system() == "Darwin":
++            # Apple Silicon / Intel Mac: no nvidia-smi. Probe Metal GPU info
++            # once via system_profiler and skip the nvidia-smi code path.
++            self.nvidia_smi = None
++            self._probeDarwinGpu()
+         else:
+             self.nvidia_smi = "nvidia-smi"
+ 
++    def _probeDarwinGpu(self):
++        """
++        Populate self.gpuName and self.gpuMemoryTotal on Darwin using
++        `system_profiler SPDisplaysDataType`. Slow (~1-2 s) so called once.
++
++        Apple Silicon GPUs have unified memory; "VRAM" reported here is the
++        OS-level budget for GPU-addressable memory (typically equal to
++        system RAM on M1/M2/M3/M4 SoCs). For per-process live tracking we
++        would need pyobjc-framework-Metal to read
++        MTLDevice.currentAllocatedSize -- intentionally deferred; see
++        patch notes.
++        """
++        if self._darwinGpuProbed:
++            return
++        self._darwinGpuProbed = True
++        try:
++            out = subprocess.check_output(
++                ["system_profiler", "SPDisplaysDataType"],
++                stderr=subprocess.DEVNULL, timeout=5,
++            ).decode("utf-8", errors="replace")
++            for line in out.splitlines():
++                s = line.strip()
++                # "Chipset Model: Apple M4" or "Chipset Model: AMD Radeon Pro 5300M"
++                if not self.gpuName and s.startswith("Chipset Model:"):
++                    self.gpuName = s.split(":", 1)[1].strip()
++                # "VRAM (Total): 8 GB" / "VRAM (Dynamic, Max): ..."
++                if not self.gpuMemoryTotal and "VRAM" in s and ":" in s:
++                    val = s.split(":", 1)[1].strip()
++                    # Match the nvidia path which stores a string without
++                    # the unit suffix; we keep the unit for Apple since it
++                    # is reported in GB not MiB and the consumer is informational.
++                    self.gpuMemoryTotal = val
++        except Exception as exc:
++            logging.debug(f'Darwin GPU probe failed: "{exc}".')
++
+     def _addKV(self, k, v):
+         if isinstance(v, tuple):
+             for ki, vi in v._asdict().items():

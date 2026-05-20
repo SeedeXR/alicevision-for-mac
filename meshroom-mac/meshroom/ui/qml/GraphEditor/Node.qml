@@ -1,0 +1,909 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import QtQuick.Effects
+
+import MaterialIcons 2.2
+import Utils 1.0
+
+/**
+ * Visual representation of a Graph Node.
+ */
+
+Item {
+    id: root
+
+    /// The underlying Node object
+    property variant node
+    /// Whether the node can be modified
+    property bool readOnly: node.locked
+    /// Whether the node is in compatibility mode
+    readonly property bool isCompatibilityNode: node ? node.hasOwnProperty("compatibilityIssue") : false
+    /// Mouse related states
+    property bool mainSelected: false
+    property bool selected: false
+    property bool hovered: false
+    property bool dragging: mouseArea.drag.active
+    /// Node label
+    property string nodeLabel: node ? node.label : ""
+    /// Combined x and y
+    property point position: Qt.point(x, y)
+    /// Styling
+    readonly property color defaultColor: isCompatibilityNode ? activePalette.mid : !node.isComputableType ? "#BA3D69" : activePalette.base
+    property color baseColor: defaultColor
+
+    /// Shake Relevance
+    readonly property double maxAmplitude: 500.0;
+    readonly property int shakeThreshold: 5;
+    
+    property int shakeCounter: 0;
+    property bool shaking: false;
+    property int shakeDetectionInterval: 1000;  // 1 Second to complete the shake else the counter is reset
+
+    property double originalRootX: 0.0;
+    property double originalRootY: 0.0;
+
+    property int directionX: 0;
+    property int directionY: 0;
+
+    property point mousePosition: Qt.point(mouseArea.mouseX, mouseArea.mouseY)
+    property bool hasWarnings: false
+
+    Item {
+        id: m
+        property bool displayParams: false
+    }
+
+    // Mouse interaction related signals
+    signal pressed(var mouse)
+    signal released(var mouse)
+    signal clicked(var mouse)
+    signal doubleClicked(var mouse)
+    signal moved(var position)
+    signal shaked()
+    signal entered()
+    signal exited()
+
+    // Already connected attribute with another edge in DropArea
+    signal edgeAboutToBeRemoved(var input)
+
+    /// Emitted when child attribute pins are created
+    signal attributePinCreated(var attribute, var pin)
+    /// Emitted when child attribute pins are deleted
+    signal attributePinDeleted(var attribute, var pin)
+
+    // use node name as object name to simplify debugging
+    objectName: node ? node.name : ""
+
+    // initialize position with node coordinates
+    x: root.node ? root.node.x : undefined
+    y: root.node ? root.node.y : undefined
+
+    implicitHeight: childrenRect.height
+
+    SystemPalette { id: activePalette }
+
+    Connections {
+        target: root.node
+        // update x,y when node position changes
+        function onPositionChanged() {
+            root.x = root.node.x
+            root.y = root.node.y
+        }
+        function onNameChanged() {
+            // HACK: Make sure when the node name changes the node label is updated
+            root.nodeLabel = ""
+            // Restore binding to root.node.label
+            root.nodeLabel = Qt.binding(function() { return root.node.label; })
+        }
+    }
+
+    Timer {
+        id: shakeDetectionTimer;
+        interval: root.shakeDetectionInterval;
+        onTriggered: {
+            if (root.shaking) {
+                root.resetShaking();
+            }
+        }
+    }
+
+    function beginShaking() {
+        /**
+         * Sets up the shake related values.
+         * Enables Shake detection.
+         */
+        root.shaking = true;
+
+        // Capture the current Root's X and Y to use in detecting the movement of the node around these points
+        root.originalRootX = root.x;
+        root.originalRootY = root.y;
+    }
+
+    function resetShaking() {
+        /**
+         * Resets the shaking and the variables tracking a shake.
+         */
+        // Reset the shake counter when shaking has ended
+        root.shakeCounter = 0;
+
+        // Reset the direction detection
+        root.directionX = 0;
+        root.directionY = 0;
+    }
+
+    function endShaking() {
+        /**
+         * Resets all values related to shaking.
+         * Ends the shake detection.
+         */
+        root.shaking = false;
+
+        root.resetShaking();
+    }
+
+    function checkForShake() {
+        /**
+         * Detects a shake if a the node has been moved across the originally captured x and y positions
+         * back and forth a given number of times specified by the amplitude.
+         */
+        
+        if (!root.shaking) {
+            return;
+        }
+
+        // This indicates that the shake was either reset or we are starting from scratch
+        if (root.shakeCounter === 0 && !shakeDetectionTimer.running) {
+            shakeDetectionTimer.start();
+        }
+
+        const deltaX = root.x - root.originalRootX;
+        const deltaY = root.y - root.originalRootY;
+
+        // Check if the node has not travelled too much from the original position
+        // If so, stop detecting a shake as that might not be needed
+        if (Math.abs(deltaX) > root.maxAmplitude || Math.abs(deltaY) > root.maxAmplitude) {
+            root.endShaking();
+        }
+
+        // This checks the current direction in which the node is travelling
+        // if the node has moved on the left side of the original position -1
+        // if the node has moved on the right side of the original position +1
+
+        //        <--   Origin
+        //       [Node]   |
+        //                |   [Node]
+        //                |     -->
+        // If the motion continues to be like this 'threshold' number of times
+        // This will be considered as a shake effect
+
+        const currentDirectionX = deltaX > 0 ? 1 : -1;
+        const currentDirectionY = deltaY > 0 ? 1 : -1;
+
+        // Check if we are in the opposite direction of what was the previous direction of the Node
+        // If yes then we are propagating as a shake effect
+        if (currentDirectionX != root.directionX || currentDirectionY != root.directionY) {
+            // One shake cycle is complete, increment the counter
+            root.shakeCounter++;
+
+            // Update the original direction to be the current one
+            root.directionX = currentDirectionX;
+            root.directionY = currentDirectionY;
+        }
+
+        // The node has moved in a shake effect to match the threshold and this is causing it to be detected as a shake
+        if (root.shakeCounter > root.shakeThreshold) {
+            root.shaked();
+            // Reset the counter to detect another shake effect
+            root.resetShaking();
+        }
+    }
+
+    function formatInternalAttributesTooltip(invalidation, comment) {
+        /*
+         * Creates a string that contains the invalidation message (if it is not empty) in bold,
+         * followed by the comment message (if it exists) in regular font, separated by an empty
+         * line.
+         * Invalidation and comment messages have their tabs or line returns in plain text format replaced
+         * by their HTML equivalents.
+         */
+        let str = ""
+        if (invalidation !== "") {
+            let replacedInvalidation = node.invalidation.replace(/\n/g, "<br/>").replace(/\t/g, "&nbsp;&nbsp;&nbsp;&nbsp;")
+            str += "<b>" + replacedInvalidation + "</b>"
+        }
+        if (invalidation !== "" && comment !== "") {
+            str += "<br/><br/>"
+        }
+        if (comment !== "") {
+            let replacedComment = node.comment.replace(/\n/g, "<br/>").replace(/\t/g, "&nbsp;&nbsp;&nbsp;&nbsp;")
+            str += replacedComment
+        }
+        return str
+    }
+
+    // Used to generate list of node's label sharing the same uid
+    function generateDuplicateList() {
+        let str = "<b>Shares internal folder (data) with:</b>"
+        for (let i = 0; i < node.duplicates.count; ++i) {
+            if (i % 5 === 0)
+                str += "<br>"
+
+            const currentNode = node.duplicates.at(i)
+
+            if (i === node.duplicates.count - 1) {
+                str += currentNode.nameToLabel(currentNode.name)
+                return str
+            }
+
+            str += (currentNode.nameToLabel(currentNode.name) + ", ")
+        }
+        return str
+    }
+
+    function updateChildPin(attribute, parentPins, pin) {
+        /*
+         * Update the pin of a child attribute: if the attribute is enabled and its parent is
+         * a GroupAttribute, the visibility is determined based on the parent pin's "expanded" state,
+         * using the "parentPins" map to access the status.
+         * If the current pin is also a GroupAttribute and is expanded while its newly "visible" state
+         * is false, it is reset.
+         */
+        if (Boolean(attribute.enabled)) {
+            // If the parent is a GroupAttribute, use the status of the parent's pin to determine visibility
+            // UNLESS the child attribute is already connected with a visible edge
+            if (attribute.root && attribute.root.baseType === "GroupAttribute") {
+                var visible = Boolean(parentPins.get(attribute.root.name))
+                if (!visible && parentPins.has(attribute.name) && parentPins.get(attribute.name) === true) {
+                    parentPins.set(attribute.name, false)
+                    pin.expanded = false
+                }
+                return visible
+            }
+            return true
+        }
+        return false
+    }
+
+    function generateAttributesModel(isOutput, parentPins) {
+        if (!node) {
+            return undefined
+        }
+
+        const attributes = []
+        for (let i = 0; i < node.attributes.count; i++) {
+            let attr = node.attributes.at(i)
+            if (attr.isOutput == isOutput) {
+                // Add the attribute to the model
+                attributes.push(attr)
+                if (attr.baseType === "GroupAttribute") {
+                    // If it is a GroupAttribute, initialize its pin status
+                    parentPins.set(attr.name, false)
+                }
+
+                // Check and add any child this attribute might have
+                attr.flatStaticChildren.forEach((child) =>
+                    {
+                        attributes.push(child)
+                        if (child.baseType === "GroupAttribute") {
+                            parentPins.set(child.name, false)
+                        }
+                    }
+                )
+            }
+        }
+
+        return attributes
+    }
+
+    // Main Layout
+    MouseArea {
+        id: mouseArea
+        width: parent.width
+        height: body.height
+        drag.target: root
+        // Small drag threshold to avoid moving the node by mistake
+        drag.threshold: 2
+        hoverEnabled: true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: (mouse) => root.clicked(mouse)
+        onDoubleClicked: (mouse) => root.doubleClicked(mouse)
+        onEntered: root.entered()
+        onExited: root.exited()
+        drag.onActiveChanged: {
+            if (!drag.active) {
+                root.moved(Qt.point(root.x, root.y))
+            }
+        }
+
+        cursorShape: drag.active ? Qt.ClosedHandCursor : Qt.ArrowCursor
+
+        onPressed: function(mouse) {
+            root.pressed(mouse);
+            // Begin shake detection
+            root.beginShaking();
+        }
+
+        onReleased: function(mouse) {
+            root.released(mouse);
+            // End shake detection
+            root.endShaking();
+        }
+
+        // Selection border
+        Rectangle {
+            anchors.fill: nodeContent
+            anchors.margins: -border.width
+            visible: root.mainSelected || root.hovered || root.selected
+            border.width: {
+                if(root.mainSelected)
+                    return 3
+                if(root.selected)
+                    return 2.5
+                return 2
+            }
+            border.color: {
+                if (hasWarnings === true)
+                    return Colors.warning                    
+                if (root.mainSelected)
+                    return activePalette.highlight
+                if (root.selected)
+                    return Qt.darker(activePalette.highlight, 1.2)
+                return Qt.lighter(activePalette.base, 3)
+            }
+            opacity: 0.9
+            radius: background.radius + border.width
+            color: "transparent"
+        }
+
+        Rectangle {
+            id: background
+            anchors.fill: nodeContent
+            color: node.color === "" ? Qt.lighter(activePalette.base, 1.4) : node.color
+            layer.enabled: true
+            layer.effect: MultiEffect {
+                shadowColor: activePalette.shadow
+                // Performance tip: Reduce blurMax (not shadowBlur) to minimize shadow blur.
+                shadowBlur: 1.0  // So we keep shadowBlur at 1.0.
+                shadowEnabled: true
+                blurMax: 4  // large values could impact performances
+            }
+            radius: 3
+            opacity: 0.85
+        }
+
+        Rectangle {
+            id: nodeContent
+            width: parent.width
+            height: childrenRect.height
+            color: "transparent"
+
+            // Data Layout
+            Column {
+                id: body
+                width: parent.width
+
+                // Header
+                Rectangle {
+                    id: header
+                    width: parent.width
+                    height: headerLayout.height
+                    color: root.baseColor
+                    radius: background.radius
+
+                    // Fill header's bottom radius
+                    Rectangle {
+                        width: parent.width
+                        height: parent.radius
+                        anchors.bottom: parent.bottom
+                        color: parent.color
+                        z: -1
+                    }
+
+                    // Header Layout
+                    RowLayout {
+                        id: headerLayout
+                        width: parent.width
+                        spacing: 0
+
+                        // Node Name
+                        Label {
+                            id: nodeLabel
+                            Layout.fillWidth: true
+                            text: root.nodeLabel
+                            padding: 4
+                            color: root.mainSelected ? activePalette.highlightedText : activePalette.text
+                            elide: Text.ElideMiddle
+                            font.pointSize: 8
+                        }
+
+                        // Node State icons
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.alignment: Qt.AlignRight
+                            Layout.rightMargin: 2
+                            spacing: 2
+
+                            // CompatibilityBadge icon for CompatibilityNodes
+                            Loader {
+                                active: root.isCompatibilityNode
+                                sourceComponent: CompatibilityBadge {
+                                    sourceComponent: iconDelegate
+                                    canUpgrade: root.node.canUpgrade
+                                    issueDetails: root.node.issueDetails
+                                }
+                            }
+
+                            // Data sharing indicator
+                            // Note: for an unknown reason, there are some performance issues with the UI refresh.
+                            // Example: a node duplicated 40 times will be slow while creating another identical node
+                            // (sharing the same uid) will not be as slow. If save, quit and reload, it will become slow.
+                            MaterialToolButton {
+                                property string baseText: "<b>Shares internal folder (data) with other node(s). Hold click for details.</b>"
+                                property string toolTipText: visible ? baseText : ""
+                                visible: node.hasDuplicates
+                                text: MaterialIcons.layers
+                                font.pointSize: 7
+                                padding: 2
+                                palette.text: Colors.sysPalette.text
+                                ToolTip.text: toolTipText
+
+                                onPressed: {
+                                    offsetReleased.running = false
+                                    toolTipText = visible ? generateDuplicateList() : ""
+                                }
+                                onReleased: {
+                                    toolTipText = ""
+                                    offsetReleased.running = true
+                                }
+                                onCanceled: released()
+
+                                // Used for a better user experience with the button
+                                // Avoid to change the text too quickly
+                                Timer {
+                                    id: offsetReleased
+                                    interval: 750
+                                    running: false
+                                    repeat: false
+                                    onTriggered: parent.toolTipText = visible ? parent.baseText : ""
+                                }
+                            }
+
+                            // Attribute warnings
+                            MaterialLabel {
+                                visible: hasWarnings
+                                text: MaterialIcons.fmd_bad
+                                color: Colors.warning
+                                padding: 2
+                                font.pointSize: 7
+                                palette.text: Colors.sysPalette.text
+                                ToolTip.text: "Some attribute validations are failing for this node."
+                            }
+
+                            // Submitted externally indicator
+                            MaterialLabel {
+                                visible: node.isExternal
+                                text: MaterialIcons.cloud
+                                padding: 2
+                                font.pointSize: 7
+                                palette.text: Colors.sysPalette.text
+                                ToolTip.text: "Computed Externally"
+                            }
+
+                            // Lock indicator
+                            MaterialLabel {
+                                visible: root.readOnly
+                                text: MaterialIcons.lock
+                                padding: 2
+                                font.pointSize: 7
+                                palette.text: "red"
+                                ToolTip.text: "Locked"
+                            }
+
+                            MaterialLabel {
+                                id: nodeComment
+                                visible: node.comment !== "" || node.invalidation !== ""
+                                text: MaterialIcons.comment
+                                padding: 2
+                                font.pointSize: 7
+
+                                ToolTip {
+                                    id: nodeCommentTooltip
+                                    parent: header
+                                    visible: nodeCommentMA.containsMouse && nodeComment.visible
+                                    text: formatInternalAttributesTooltip(node.invalidation, node.comment)
+                                    implicitWidth: 400 // Forces word-wrap for long comments but the tooltip will be bigger than needed for short comments
+                                    delay: 300
+
+                                    // Relative position for the tooltip to ensure we will not get stuck in a case where it starts appearing over the mouse's
+                                    // position because it is a bit long and cutting off the hovering of the mouse area (which leads to the tooltip beginning
+                                    // to appear and immediately disappearing, over and over again)
+                                    x: implicitWidth / 2.5
+                                }
+
+                                MouseArea {
+                                    // If the node header is hovered, comments may be displayed
+                                    id: nodeCommentMA
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                }
+                            }
+
+                            MaterialLabel {
+                                id: nodeImageOutput
+                                visible: (node.hasImageOutput || node.has3DOutput || node.hasSequenceOutput || node.hasTextOutput)
+                                text: MaterialIcons.visibility
+                                padding: 2
+                                font.pointSize: 7
+                                property bool displayable: !node.isComputableType || (node.chunks.count > 0 && (["SUCCESS"].includes(node.globalStatus)))
+                                color: displayable ? palette.text : Qt.darker(palette.text, 1.8)
+
+                                ToolTip {
+                                    id: nodeImageOutputTooltip
+                                    parent: header
+                                    visible: nodeImageOutputMA.containsMouse && nodeImageOutput.visible
+                                    text: {
+                                        if ((node.hasImageOutput || node.hasSequenceOutput) && !node.has3DOutput)
+                                            return nodeImageOutput.displayable ? "Double-click on this node to load its outputs in the Image Viewer." : "This node has image outputs."
+                                        else if (node.has3DOutput && !node.hasImageOutput && !node.hasSequenceOutput)
+                                            return nodeImageOutput.displayable ? "Double-click on this node to load its outputs in the 3D Viewer." : "This node has 3D outputs."
+                                        else if (node.hasTextOutput && !node.hasImageOutput && !node.hasSequenceOutput && !node.has3DOutput)
+                                            return nodeImageOutput.displayable ? "Double-click on this node to load its outputs in the Text Viewer." : "This node has text outputs."
+                                        else  // Handle case where a node might have both 2D and 3D outputs
+                                            return nodeImageOutput.displayable ? "Double-click on this node to load its outputs in the Image or 3D Viewer." : "This node has image and 3D outputs."
+                                    }
+                                    implicitWidth: 500
+                                    delay: 300
+
+                                    // Relative position for the tooltip to ensure we will not get stuck in a case where it starts appearing over the mouse's
+                                    // position because it is a bit long and cutting off the hovering of the mouse area (which leads to the tooltip beginning
+                                    // to appear and immediately disappearing, over and over again)
+                                    x: implicitWidth / 2.5
+                                }
+
+                                MouseArea {
+                                    // If the node header is hovered, comments may be displayed
+                                    id: nodeImageOutputMA
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Node Chunks
+                NodeChunks {
+                    visible: node.isComputableType
+                    targetNode: node
+                    defaultColor: Colors.sysPalette.mid
+                    implicitHeight: 3
+                    width: parent.width
+
+                    model: {
+                        if (node && node.chunksCreated)
+                            return node.chunks
+                        else if (node && !node.chunksCreated)
+                            return node.chunkPlaceholder
+
+                        return undefined
+                    }
+                    preprocessChunk: node && node.hasPreprocessChunk ? node.preprocessChunk : null
+                    postprocessChunk: node && node.hasPostprocessChunk ? node.postprocessChunk : null
+
+                    Rectangle {
+                        anchors.fill: parent
+                        color: Colors.sysPalette.mid
+                        z: -1
+                    }
+                }
+
+                // Vertical Spacer
+                Item { width: parent.width; height: 2 }
+
+                // Input/Output Attributes
+                Item {
+                    id: nodeAttributes
+                    width: parent.width - 2
+                    height: childrenRect.height
+                    anchors.horizontalCenter: parent.horizontalCenter
+
+                    Column {
+                        id: attributesColumn
+                        width: parent.width
+                        spacing: 5
+                        bottomPadding: 2
+
+                        Column {
+                            id: outputs
+                            width: parent.width
+                            spacing: 3
+
+                            property var parentPins: new Map()
+                            signal parentPinsUpdated()
+
+                            Repeater {
+                                model: root.generateAttributesModel(true, outputs.parentPins)  // isOutput = true
+
+                                delegate: Loader {
+                                    id: outputLoader
+
+                                    active: Boolean(modelData.isOutput && modelData.desc.visible)
+                                    visible: {
+                                        if (Boolean(modelData.enabled || modelData.hasAnyOutputLinks || modelData.hasAnyInputLinks)) {
+                                            if (modelData.root && modelData.root.baseType === "GroupAttribute") {
+                                                return Boolean(outputs.parentPins.get(modelData.root.name) ||
+                                                               modelData.hasAnyOutputLinks ||
+                                                               modelData.hasAnyInputLinks)
+                                            }
+                                            return true
+                                        }
+                                        return false
+                                    }
+
+                                    anchors.right: parent.right
+                                    width: outputs.width
+
+                                    Connections {
+                                        target: outputs
+
+                                        function onParentPinsUpdated() {
+                                            visible = updateChildPin(modelData, outputs.parentPins, outputLoader.item)
+                                        }
+                                    }
+
+                                    sourceComponent: AttributePin {
+                                        id: outPin
+                                        nodeItem: root
+                                        attribute: modelData
+
+                                        property real globalX: root.x + nodeAttributes.x + outputs.x + outputLoader.x + outPin.x
+                                        property real globalY: root.y + nodeAttributes.y + outputs.y + outputLoader.y + outPin.y
+
+                                        onIsConnectedChanged: function() {
+                                            outputs.parentPinsUpdated()
+                                        }
+
+                                        onPressed: function(mouse) {
+                                            root.pressed(mouse)
+                                        }
+
+                                        onClicked: function() {
+                                            expanded = !expanded
+                                            if (outputs.parentPins.has(modelData.name)) {
+                                                outputs.parentPins.set(modelData.name, expanded)
+                                                outputs.parentPinsUpdated()
+                                            }
+                                        }
+
+                                        onEdgeAboutToBeRemoved: function(input) {
+                                            root.edgeAboutToBeRemoved(input)
+                                        }
+
+                                        Component.onCompleted: attributePinCreated(attribute, outPin)
+                                        onChildPinCreated: attributePinCreated(childAttribute, outPin)
+                                        Component.onDestruction: attributePinDeleted(attribute, outPin)
+                                        onChildPinDeleted: attributePinDeleted(childAttribute, outPin)
+                                    }
+                                }
+                            }
+                        }
+
+                        Column {
+                            id: inputs
+                            width: parent.width
+                            spacing: 3
+
+                            property var parentPins: new Map()
+                            signal parentPinsUpdated()
+
+                            Repeater {
+                                model: root.generateAttributesModel(false, inputs.parentPins)  // isOutput = false
+
+                                delegate: Loader {
+                                    id: inputLoader
+
+                                    active: !modelData.isOutput && modelData.exposed && modelData.desc.visible
+                                    visible: {
+                                        if (Boolean(modelData.enabled)) {
+                                            if (modelData.root && modelData.root.baseType === "GroupAttribute") {
+                                                return Boolean(inputs.parentPins.get(modelData.root.name) ||
+                                                               modelData.hasAnyOutputLinks ||
+                                                               modelData.hasAnyInputLinks)
+                                            }
+                                            return true
+                                        }
+                                        return false
+                                    }
+
+                                    width: inputs.width
+
+                                    Connections {
+                                        target: inputs
+
+                                        function onParentPinsUpdated() {
+                                            visible = updateChildPin(modelData, inputs.parentPins, inputLoader.item)
+                                        }
+                                    }
+
+                                    sourceComponent: AttributePin {
+                                        id: inPin
+                                        nodeItem: root
+                                        attribute: modelData
+
+                                        property real globalX: root.x + nodeAttributes.x + inputs.x + inputLoader.x + inPin.x
+                                        property real globalY: root.y + nodeAttributes.y + inputs.y + inputLoader.y + inPin.y
+
+                                        onIsConnectedChanged: function() {
+                                            inputs.parentPinsUpdated()
+                                        }
+
+                                        readOnly: Boolean(root.readOnly || modelData.isReadOnly)
+                                        Component.onCompleted: attributePinCreated(attribute, inPin)
+                                        Component.onDestruction: attributePinDeleted(attribute, inPin)
+
+                                        onPressed: function(mouse) {
+                                            root.pressed(mouse)
+                                        }
+
+                                        onClicked: function() {
+                                            expanded = !expanded
+                                            if (inputs.parentPins.has(modelData.name)) {
+                                                inputs.parentPins.set(modelData.name, expanded)
+                                                inputs.parentPinsUpdated()
+                                            }
+                                        }
+
+                                        onEdgeAboutToBeRemoved: function(input) {
+                                            root.edgeAboutToBeRemoved(input)
+                                        }
+
+                                        onChildPinCreated: function(childAttribute, inPin) { attributePinCreated(childAttribute, inPin) }
+                                        onChildPinDeleted: function(childAttribute, inPin) { attributePinDeleted(childAttribute, inPin) }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Vertical Spacer
+                        Rectangle {
+                            height: inputParams.height > 0 ? 3 : 0
+                            visible: (height == 3)
+                            Behavior on height { PropertyAnimation {easing.type: Easing.Linear} }
+                            width: parent.width
+                            color: Colors.sysPalette.mid
+                            MaterialToolButton {
+                                text: " "
+                                width: parent.width
+                                height: parent.height
+                                padding: 0
+                                spacing: 0
+                                anchors.margins: 0
+                                font.pointSize: 6
+                                onClicked: {
+                                    m.displayParams = ! m.displayParams
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            id: inputParamsRect
+                            width: parent.width
+                            height: childrenRect.height
+                            color: "transparent"
+
+                            Column {
+                                id: inputParams
+                                width: parent.width
+                                spacing: 3
+
+                                property var parentPins: new Map()
+                                signal parentPinsUpdated()
+
+                                Repeater {
+                                    model: root.generateAttributesModel(false, inputParams.parentPins)  // isOutput = false
+
+                                    delegate: Loader {
+                                        id: paramLoader
+
+                                        active: !modelData.isOutput && !modelData.exposed && modelData.desc.visible
+                                        visible: {
+                                            if (Boolean(modelData.enabled || modelData.hasAnyOutputLinks || modelData.hasAnyInputLinks)) {
+                                                if (modelData.root && modelData.root.baseType === "GroupAttribute") {
+                                                    return Boolean(inputParams.parentPins.get(modelData.root.name) ||
+                                                                   modelData.hasAnyOutputLinks ||
+                                                                   modelData.hasAnyInputLinks)
+                                                }
+                                                return true
+                                            }
+                                            return false
+                                        }
+
+                                        property bool isFullyActive: Boolean(m.displayParams ||
+                                                                             modelData.hasAnyInputLinks ||
+                                                                             modelData.hasAnyOutputLinks)
+                                        width: parent.width
+
+                                        Connections {
+                                            target: inputParams
+
+                                            function onParentPinsUpdated() {
+                                                visible = updateChildPin(modelData, inputParams.parentPins, paramLoader.item)
+                                            }
+                                        }
+
+                                        sourceComponent: AttributePin {
+                                            id: inParamsPin
+                                            nodeItem: root
+                                            attribute: modelData
+
+                                            property real globalX: root.x + nodeAttributes.x + inputParamsRect.x + paramLoader.x + inParamsPin.x
+                                            property real globalY: root.y + nodeAttributes.y + inputParamsRect.y + paramLoader.y + inParamsPin.y
+
+                                            onIsConnectedChanged: function() {
+                                                inputParams.parentPinsUpdated()
+                                            }
+
+                                            height: isFullyActive ? childrenRect.height : 0
+                                            Behavior on height { PropertyAnimation {easing.type: Easing.Linear} }
+                                            visible: (height == childrenRect.height)
+
+                                            readOnly: Boolean(root.readOnly || modelData.isReadOnly)
+                                            Component.onCompleted: attributePinCreated(attribute, inParamsPin)
+                                            Component.onDestruction: attributePinDeleted(attribute, inParamsPin)
+
+                                            onPressed: function(mouse) {
+                                                root.pressed(mouse)
+                                            }
+
+                                            onClicked: function() {
+                                                expanded = !expanded
+                                                if (inputParams.parentPins.has(modelData.name)) {
+                                                    inputParams.parentPins.set(modelData.name, expanded)
+                                                    inputParams.parentPinsUpdated()
+                                                }
+                                            }
+
+                                            onEdgeAboutToBeRemoved: function(input) {
+                                                root.edgeAboutToBeRemoved(input)
+                                            }
+
+                                            onChildPinCreated: function(childAttribute, inParamsPin) { attributePinCreated(childAttribute, inParamsPin) }
+                                            onChildPinDeleted: function(childAttribute, inParamsPin) { attributePinDeleted(childAttribute, inParamsPin) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        MaterialToolButton {
+                            text: root.hovered ? (m.displayParams ? MaterialIcons.arrow_drop_up : MaterialIcons.arrow_drop_down) : " "
+                            Layout.alignment: Qt.AlignBottom
+                            width: parent.width
+                            height: 5
+                            padding: 0
+                            spacing: 0
+                            anchors.margins: 0
+                            font.pointSize: 10
+                            onClicked: {
+                                m.displayParams = ! m.displayParams
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Set to true by the GraphEditor's DropArea when files are dragged over this InitNode
+    property bool initNodeDragHover: false
+
+    // Highlight overlay shown when files are dragged over this InitNode
+    Rectangle {
+        anchors.fill: mouseArea
+        visible: root.node && root.node.isInitNode && root.initNodeDragHover
+        color: Colors.sysPalette.highlight
+        opacity: 0.35
+        radius: background.radius
+    }
+}

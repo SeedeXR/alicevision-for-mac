@@ -1,0 +1,111 @@
+# ============================================================
+# alicevision-for-mac — .gitignore
+# ============================================================
+# Single source of truth for the monorepo. The two venv subdirs
+# (docs-venv/, meshroom-venv/) carry their own auto-generated
+# venv-level .gitignore files (`*`) — those don't conflict;
+# they're ignored at the parent level here anyway.
+#
+# NOTE: gitignore does NOT support inline `#` comments — each
+# pattern is on its own line; comments go on separate lines.
+
+# ---------- Build artifacts ----------
+build/
+build-*/
+dist/
+# mkdocs build output:
+site/
+# ctest scratch at repo root:
+Testing/
+CMakeCache.txt
+CMakeFiles/
+*.o
+*.air
+*.metallib
+*.dylib
+*.dSYM/
+compile_commands.json
+# Swift Package Manager build cache (meshroom-native/):
+.build/
+*.xcodeproj/
+*.xcworkspace/
+.swiftpm/
+
+# ---------- Python virtual envs ----------
+docs-venv/
+meshroom-venv/
+.venv/
+__pycache__/
+*.pyc
+
+# ---------- Editor / OS / IDE / cache ----------
+.DS_Store
+.cache/
+.claude/
+.vscode/
+.idea/
+*.swp
+*~
+
+# ---------- External, NOT tracked in this repo ----------
+# `upstream/` is a symlink to the read-only reference AliceVision
+# clone outside this monorepo (resolves to
+# ../alicevision-windows/AliceVision). Contributors create it
+# locally per the build doc.
+upstream
+
+# `meshroom-mac/` IS now tracked (S51 monorepo consolidation).
+# It's a clean copy of upstream Meshroom (commit 0ab90c0b) with
+# Mac patches pre-applied (S42 + S51 Windows-cruft removal:
+# `start.bat`, `docs/make.bat` deleted). Patches under
+# `patches/meshroom/` + `patches/alicevision-meshroom/` kept as
+# the historical record of what we changed FROM upstream stock.
+#
+# DO NOT add `meshroom-mac/` to ignore list — that breaks the
+# monorepo. Use `git rm -r meshroom-mac/` if you ever need to
+# regenerate it from upstream.
+
+# Meshroom RUN outputs (generated artefacts; not source).
+meshroom-mac-out/
+meshroom-out/
+
+# Meshroom-specific build artefacts inside meshroom-mac/ tree
+# (Qt/QML compiled forms, IDE projects, install staging).
+*.qmlc
+*.jsc
+*.qmlproject*
+*.creator*
+*.cflags
+*.cxxflags
+meshroom-mac/install/
+meshroom-mac/build/
+meshroom-mac/dist/
+meshroom-mac/dl/
+meshroom-mac/.tests/
+meshroom-mac/.pytest_cache/
+meshroom-mac/data/
+meshroom-mac/docs/build/
+meshroom-mac/docs/source/generated/
+
+# ---------- Test datasets ----------
+# Downloadable from sources documented in `docs/user/pipeline.md`.
+# Don't bloat the repo with test imagery; users fetch on demand.
+dataset_monstree/
+dataset_middlebury/
+dataset_*/
+
+# ---------- Vendored deps that download themselves ----------
+# metal-cpp (~1 MB) ships fresh from developer.apple.com per the
+# build doc. The local copy stays VCS-ignored so we don't pin
+# a snapshot.
+third_party/metal-cpp/
+# LEMON (32 MB) IS tracked — patched per S39; see
+# third_party/CMakeLists.txt header for vendoring rationale.
+
+# ---------- Agent / session-state (private to author) ----------
+# Session-handover notes for AI-assisted dev:
+memory/
+# Author's reference PDFs:
+books/
+# Author-local instructions:
+instructions/
