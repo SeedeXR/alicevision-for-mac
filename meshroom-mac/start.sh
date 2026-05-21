@@ -1,15 +1,40 @@
-#!/bin/bash
-# Portable realpath: macOS BSD readlink lacks -f. python3 is required
-# by the next line anyway, so we reuse it here. Matches `readlink -f`
-# semantics on Linux (resolves symlinks in every path component).
-export MESHROOM_ROOT="$(dirname "$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")"
-export PYTHONPATH=$MESHROOM_ROOT:$PYTHONPATH
+#!/usr/bin/env bash
+#
+# meshroom-mac/start.sh — launch the Qt UI with the full Apple-Silicon-port
+# environment (matches scripts/run_meshroom.sh for the CLI). Without this
+# setup, every aliceVision node registers as UnknownNodeType and the UI
+# is non-functional.
+#
+set -e
 
-# using existing alicevision release
-#export LD_LIBRARY_PATH=/foo/Meshroom-2023.2.0/aliceVision/lib/
-#export PATH=$PATH:/foo/Meshroom-2023.2.0/aliceVision/bin/
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MESHROOM_ROOT="$ROOT/meshroom-mac"
 
-# using alicevision built source
-#export PATH=$PATH:/foo/build/Linux-x86_64/
+# Activate the Meshroom venv (PySide6 + psutil + pyseq + ...).
+# shellcheck disable=SC1091
+if [ -f "$ROOT/meshroom-venv/bin/activate" ]; then
+    source "$ROOT/meshroom-venv/bin/activate"
+fi
 
-python3 "$MESHROOM_ROOT/meshroom/ui"
+# AliceVision runtime — native arm64 Metal binaries, sensor DB, OCIO, dylib paths.
+export ALICEVISION_ROOT="$ROOT/build/alicevision_root"
+export ALICEVISION_BIN_PATH="$ROOT/build"
+export ALICEVISION_SENSOR_DB="$ROOT/build/alicevision_root/share/aliceVision/cameraSensors.db"
+export ALICEVISION_OCIO="$ROOT/build/alicevision_root/share/aliceVision/config.ocio"
+export ALICEVISION_LIBPATH="/opt/homebrew/lib"
+export PATH="$ROOT/build:$PATH"
+
+# macOS needs DYLD_*, not LD_LIBRARY_PATH.
+export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:${DYLD_FALLBACK_LIBRARY_PATH:-}"
+
+# Meshroom plugin discovery — node descriptors with Darwin patches applied.
+export MESHROOM_NODES_PATH="$MESHROOM_ROOT/nodes"
+export MESHROOM_PIPELINE_TEMPLATES_PATH="$MESHROOM_ROOT/nodes"
+
+# PYTHONPATH:
+#   meshroom-mac/         → patched Meshroom Python package.
+#   src/python_shim/      → pyalicevision parallelization shim.
+export PYTHONPATH="$MESHROOM_ROOT:$ROOT/src/python_shim:${PYTHONPATH:-}"
+
+# Launch the Qt UI.
+exec python3 "$MESHROOM_ROOT/meshroom/ui" "$@"

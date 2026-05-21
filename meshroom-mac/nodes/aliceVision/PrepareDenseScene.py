@@ -2,6 +2,7 @@ __version__ = "3.1"
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
+from pyalicevision import parallelization as avpar
 
 
 class PrepareDenseScene(desc.AVCommandLineNode):
@@ -10,7 +11,15 @@ This node export undistorted images so the depth map and texturing can be comput
 """
 
     commandLine = "aliceVision_prepareDenseScene {allParams}"
-    size = desc.DynamicNodeSize("input")
+    # Mac-port deviation: use DynamicViewsSize (parses upstream SfMData
+    # JSON directly) instead of the framework's DynamicNodeSize. The
+    # latter reads `inputLink.node.size`, which on this port returns a
+    # STALE value captured at template-load time (before CameraInit
+    # populated viewpoints), yielding 0 chunks and silently skipping the
+    # node — DepthMap then fails with "Cannot find image file
+    # corresponding to the view '<viewId>'". DynamicViewsSize bypasses
+    # the size-propagation chain. See memory/handover_session.md S54c.
+    size = avpar.DynamicViewsSize("input")
     parallelization = desc.Parallelization(blockSize=40)
     commandLineRange = "--rangeStart {rangeStart} --rangeSize {rangeBlockSize}"
 

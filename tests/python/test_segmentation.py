@@ -1,0 +1,1 @@
+../../plugins/ai-segmentation/tests/test_segmentation.py

@@ -6,7 +6,7 @@ import re
 import json
 from enum import Enum
 from threading import Thread, Event, Lock
-from multiprocessing.pool import ThreadPool
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Union
 from collections.abc import Iterator
 from collections import OrderedDict
@@ -102,7 +102,10 @@ class FilesModTimePollerThread(QObject):
         super().__init__(parent)
         self._thread = None
         self._mutex = Lock()
-        self._threadPool = ThreadPool(4)
+        # concurrent.futures.ThreadPoolExecutor in place of
+        # multiprocessing.pool.ThreadPool — the latter leaks POSIX
+        # semaphores at shutdown under Qt parenting.
+        self._threadPool = ThreadPoolExecutor(max_workers=4)
         self._stopFlag = Event()
         self._refreshInterval = 5  # refresh interval in seconds
         self._files = []
@@ -112,8 +115,7 @@ class FilesModTimePollerThread(QObject):
             self._filePollerRefresh = PollerRefreshStatus.DISABLED
 
     def __del__(self):
-        self._threadPool.terminate()
-        self._threadPool.join()
+        self._threadPool.shutdown(wait=False, cancel_futures=True)
 
     def start(self, files=None):
         """
@@ -145,11 +147,14 @@ class FilesModTimePollerThread(QObject):
 
     def stop(self):
         """ Request polling thread to stop. """
-        if not self._thread:
-            return
-        self._stopFlag.set()
-        self._thread.join()
-        self._thread = None
+        if self._thread:
+            self._stopFlag.set()
+            self._thread.join()
+            self._thread = None
+        try:
+            self._threadPool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            logging.warning("FilesModTimePollerThread._threadPool shutdown failed", exc_info=True)
 
     @staticmethod
     def getFileLastModTime(f):
@@ -164,7 +169,7 @@ class FilesModTimePollerThread(QObject):
         while not self._stopFlag.wait(self._refreshInterval):
             with self._mutex:
                 files = list(self._files)
-            times = self._threadPool.map(FilesModTimePollerThread.getFileLastModTime, files)
+            times = list(self._threadPool.map(FilesModTimePollerThread.getFileLastModTime, files))
             with self._mutex:
                 if files == self._files:
                     self.timesAvailable.emit(times)
@@ -219,6 +224,10 @@ class NodeStatusMonitor(QObject):
         """ Get files to monitor. """
         monitoredItems = OrderedDict()
         for node in self.monitorableNodes:
+            # Skip nodes whose plugin type failed to load (UnknownNodeType).
+            # Their nodeDesc is None and dereferencing it crashed graph load.
+            if node.nodeDesc is None:
+                continue
             # Gather all potential files
             if node._chunksCreated:
                 watchedFiles = [WatchedFile(c) for c in node.getAllChunks()]

@@ -10,7 +10,7 @@ import hashlib
 import time
 import logging
 from threading import Thread
-from multiprocessing.pool import ThreadPool
+from concurrent.futures import ThreadPoolExecutor
 
 
 class ThumbnailCache(QObject):
@@ -61,11 +61,16 @@ class ThumbnailCache(QObject):
     # Threads info and LIFO structure for running clean and createThumbnail asynchronously
     requests = []
     cleaningThread = None
-    workerThreads = ThreadPool(processes=3)
+    # concurrent.futures.ThreadPoolExecutor is used instead of
+    # multiprocessing.pool.ThreadPool to avoid the latter's POSIX-semaphore
+    # leak (its internal SimpleQueue+Lock pair stays registered with
+    # multiprocessing.resource_tracker even after terminate()/join() until
+    # the pool object itself is garbage-collected, which Qt parenting
+    # delays past process exit).
+    workerThreads = ThreadPoolExecutor(max_workers=3)
 
     def __del__(self):
-        self.workerThreads.terminate()
-        self.workerThreads.join()
+        self.workerThreads.shutdown(wait=False, cancel_futures=True)
 
     @staticmethod
     def initialize():
@@ -249,7 +254,7 @@ class ThumbnailCache(QObject):
         # Thumbnail does not exist
         # Create request and submit to worker threads
         ThumbnailCache.requests.append((imgSource, callerID))
-        ThumbnailCache.workerThreads.apply_async(func=self.handleRequestsAsync)
+        ThumbnailCache.workerThreads.submit(self.handleRequestsAsync)
 
         return None
 

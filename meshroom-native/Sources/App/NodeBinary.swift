@@ -127,7 +127,13 @@ public enum NodeBinary {
 
     /// The 12-binary mapping the macOS port ships with.  See
     /// `<repo>/build/aliceVision_*` for the on-disk set.
-    public static let specs: [String: Spec] = [
+    ///
+    /// `coreSpecs` is the set of native AliceVision binaries hardcoded into
+    /// the executable.  Plugin-supplied specs (see `loadPluginSpecs()`) are
+    /// merged on top via the `specs` lazy-static below.  Tests and the
+    /// palette read `specs`, which is the union — they never see
+    /// `coreSpecs` directly.
+    internal static let coreSpecs: [String: Spec] = [
         "CameraInit": Spec(
             executable: "aliceVision_cameraInit",
             inputFlags: [
@@ -464,12 +470,291 @@ public enum NodeBinary {
             ],
             outputTypes: ["output": "file"]
         ),
+        // Note: SegmentationBiRefNet (Python-only AI segmentation) was
+        // previously listed here as a hardcoded entry.  After the S53
+        // refactor it is supplied by the `ai-segmentation` plugin and
+        // merged in at runtime via `loadPluginSpecs()`.  This keeps the
+        // core Swift binary scope-limited to the 12 native AliceVision
+        // binaries and lets third-party plugins ship their own Python or
+        // wrapped-binary nodes without patching this file.
     ]
+
+    /// Union of `coreSpecs` and every plugin-declared spec discovered at
+    /// startup.  Computed exactly once and cached for the lifetime of the
+    /// process.  Tests, the palette, and the executor all read this — they
+    /// never see `coreSpecs` directly so plugin nodes are first-class.
+    ///
+    /// Swift's `static let` initialiser is run lazily and is thread-safe,
+    /// so concurrent first reads from the palette/executor are safe.
+    public static let specs: [String: Spec] = {
+        var merged = coreSpecs
+        for (name, spec) in loadPluginSpecs() {
+            if merged[name] != nil {
+                // Plugin specs deliberately override coreSpecs when names
+                // collide — the plugin author "owns" the node namespace
+                // once they declare it.  No warning yet; revisit when we
+                // gain a logging facility.
+            }
+            merged[name] = spec
+        }
+        return merged
+    }()
 
     /// Lookup helper.  Returns `nil` for node types the M5 runner does not
     /// support yet (e.g., `CopyFiles`, `Publish`) — the caller treats those as
     /// skipped rather than failing the pipeline outright.
     public static func spec(for nodeType: String) -> Spec? {
         specs[nodeType]
+    }
+
+    // MARK: - Plugin discovery (S53)
+
+    /// Plugin-discovery path resolution rules, applied in order:
+    ///
+    /// 1. **Bundled plugins.** `Bundle.main.bundlePath/Contents/Resources/plugins/`
+    ///    (when the app is packaged as `.app`) or `<bundlePath>/plugins/`.
+    ///    Lets shipped binaries find plugins that were copied in at build time.
+    /// 2. **Dev-mode fallback.** `<repo-root>/plugins/`, computed from `#filePath`
+    ///    by walking up to the directory containing `Package.swift`.  Lets
+    ///    `swift run` / `swift test` find plugins without an Xcode build.
+    /// 3. **Environment override.** `MESHROOM_PLUGINS_DIR` if set — supports
+    ///    out-of-tree integration tests and packaged distributions whose
+    ///    plugins live elsewhere on disk.
+    ///
+    /// The first existing directory wins.  A missing plugins/ directory is
+    /// not an error: the executor simply ships with just `coreSpecs`.
+    static func pluginSearchPaths() -> [URL] {
+        var paths: [URL] = []
+
+        // 1. App bundle (.app/Contents/Resources/plugins/ or .app/plugins/)
+        let bundleURL = URL(fileURLWithPath: Bundle.main.bundlePath)
+        paths.append(bundleURL.appendingPathComponent("Contents/Resources/plugins"))
+        paths.append(bundleURL.appendingPathComponent("plugins"))
+
+        // 2. Dev-mode: walk up from this source file to repo-root/plugins/.
+        var probe = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while probe.path != "/" {
+            let pkg = probe.appendingPathComponent("Package.swift")
+            if FileManager.default.fileExists(atPath: pkg.path) {
+                // Package.swift lives at meshroom-native/Package.swift;
+                // plugins/ is a sibling of meshroom-native/.
+                paths.append(probe.deletingLastPathComponent()
+                    .appendingPathComponent("plugins"))
+                break
+            }
+            probe.deleteLastPathComponent()
+        }
+
+        // 3. Environment override.
+        if let env = ProcessInfo.processInfo.environment["MESHROOM_PLUGINS_DIR"],
+           !env.isEmpty {
+            paths.append(URL(fileURLWithPath: env))
+        }
+
+        return paths
+    }
+
+    /// Glob `<pluginsDir>/*/plugin.json` across every candidate plugins
+    /// directory, decode the manifest, and convert each declared node into
+    /// a `Spec`.  Returns `[nodeName: Spec]` — the same shape as
+    /// `coreSpecs` so the merge in `specs` is a single dict-overlay.
+    public static func loadPluginSpecs() -> [String: Spec] {
+        var registry: [String: Spec] = [:]
+        PluginRegistry.shared.reset()
+
+        for pluginsDir in pluginSearchPaths() {
+            guard FileManager.default.fileExists(atPath: pluginsDir.path) else {
+                continue
+            }
+            let contents: [URL]
+            do {
+                contents = try FileManager.default.contentsOfDirectory(
+                    at: pluginsDir,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                )
+            } catch {
+                continue
+            }
+            for pluginDir in contents {
+                let manifestURL = pluginDir.appendingPathComponent("plugin.json")
+                guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+                    continue
+                }
+                guard let manifest = try? PluginManifest.load(from: manifestURL) else {
+                    // Swallow malformed manifests rather than crashing the
+                    // host app — a broken third-party plugin must not take
+                    // down the whole pipeline.  A future logging facility
+                    // can surface these to the user.
+                    continue
+                }
+                PluginRegistry.shared.register(manifest)
+                let wrapperScript = manifest.resolvedWrapperScript(
+                    relativeTo: pluginDir
+                )
+                for node in manifest.nodes {
+                    let spec = Spec(
+                        executable: wrapperScript,
+                        inputFlags: Array(node.inputs.keys),
+                        outputFlags: Array(node.outputs.keys),
+                        constantFlags: node.constantFlags,
+                        parallelization: node.parallelization,
+                        expectedOutputFile: nil,
+                        outputs: Array(node.outputs.keys),
+                        inputTypes: node.inputs,
+                        outputTypes: node.outputs
+                    )
+                    registry[node.name] = spec
+                }
+            }
+            // First plugins/ dir to exist wins.  Stop after we found one.
+            return registry
+        }
+        return registry
+    }
+}
+
+// MARK: - Plugin manifest decoding
+
+/// In-memory representation of a `plugin.json` manifest.  Mirrors the JSON
+/// schema documented in `docs/dev/plugin-system.md`.
+public struct PluginManifest: Decodable, Sendable, Hashable {
+    public let name: String
+    public let version: String
+    public let description: String
+    public let license: String?
+    public let computeBackends: [String]?
+    public let nodes: [PluginNodeDescriptor]
+    public let wrapperScript: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case version
+        case description
+        case license
+        case computeBackends = "compute_backends"
+        case nodes
+        case wrapperScript = "wrapper_script"
+    }
+
+    public static func load(from url: URL) throws -> PluginManifest {
+        let data = try Data(contentsOf: url)
+        return try JSONDecoder().decode(PluginManifest.self, from: data)
+    }
+
+    /// Compute the executable string to feed `GraphExecutor.runOneProcess`.
+    /// The wrapper_script field in the manifest is relative to the plugin
+    /// directory; we resolve it to a path the Swift executor's `binDir`
+    /// joining logic produces a correct URL for.  The executor treats
+    /// strings containing `/` as relative to `binDir`, so we keep the
+    /// `../scripts/run_python_node.sh` shape that the old hardcoded entry
+    /// used.  For the canonical ai-segmentation plugin this resolves to
+    /// `../scripts/run_python_node.sh` (relative to `<repo>/build/`).
+    public func resolvedWrapperScript(relativeTo pluginDir: URL) -> String {
+        // The manifest stores the path relative to the plugin dir, e.g.
+        // `../../meshroom-native/scripts/run_python_node.sh`.  The Swift
+        // GraphExecutor's `binDir` is `<repo>/build/`, so to reach the
+        // wrapper we need `../meshroom-native/scripts/run_python_node.sh`
+        // (one level up from `build/`).  We translate by:
+        //   absolute(plugin/wrapper) -> path relative to <repo>/build/
+        let absoluteWrapper = pluginDir
+            .appendingPathComponent(wrapperScript)
+            .standardizedFileURL
+        // Find the repo root from the plugin dir: pluginDir is at
+        // `<repo>/plugins/<name>`, so repo root is two levels up.
+        let repoRoot = pluginDir.deletingLastPathComponent().deletingLastPathComponent()
+        let binDir = repoRoot.appendingPathComponent("build")
+        // Build a relative path from `binDir` to `absoluteWrapper`.
+        let wrapperComponents = absoluteWrapper.standardizedFileURL.pathComponents
+        let binComponents = binDir.standardizedFileURL.pathComponents
+        var common = 0
+        while common < wrapperComponents.count,
+              common < binComponents.count,
+              wrapperComponents[common] == binComponents[common] {
+            common += 1
+        }
+        let upHops = binComponents.count - common
+        let downComponents = wrapperComponents[common...]
+        var rel = Array(repeating: "..", count: upHops)
+        rel.append(contentsOf: downComponents)
+        return rel.joined(separator: "/")
+    }
+}
+
+/// One node entry inside a plugin manifest.
+public struct PluginNodeDescriptor: Decodable, Sendable, Hashable {
+    public let name: String
+    public let icon: String
+    public let category: String
+    public let inputs: [String: String]
+    public let outputs: [String: String]
+    public let constantFlags: [String]
+    public let parallelization: NodeBinary.Parallelization?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case icon
+        case category
+        case inputs
+        case outputs
+        case constantFlags = "constant_flags"
+        case parallelization
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.icon = try c.decode(String.self, forKey: .icon)
+        self.category = try c.decode(String.self, forKey: .category)
+        self.inputs = try c.decode([String: String].self, forKey: .inputs)
+        self.outputs = try c.decode([String: String].self, forKey: .outputs)
+        self.constantFlags = try c.decodeIfPresent([String].self,
+                                                   forKey: .constantFlags) ?? []
+        self.parallelization = nil
+    }
+}
+
+// MARK: - Plugin registry (diagnostics)
+
+/// Process-wide registry of loaded plugins, populated by `loadPluginSpecs()`.
+/// Lets diagnostic UI / `--plugins` CLI introspection list what is enabled.
+public final class PluginRegistry: @unchecked Sendable {
+    public static let shared = PluginRegistry()
+
+    private let lock = NSLock()
+    private var manifests: [PluginManifest] = []
+
+    private init() {}
+
+    /// Add a manifest to the registry.  Thread-safe.
+    public func register(_ manifest: PluginManifest) {
+        lock.lock()
+        defer { lock.unlock() }
+        if !manifests.contains(where: { $0.name == manifest.name }) {
+            manifests.append(manifest)
+        }
+    }
+
+    /// Drop every previously-registered manifest.  Used by
+    /// `loadPluginSpecs()` to repopulate on each call, and by tests that
+    /// want a clean slate.
+    public func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        manifests.removeAll()
+    }
+
+    /// All currently-registered manifests.
+    public var all: [PluginManifest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return manifests
+    }
+
+    /// Look up a manifest by plugin name.
+    public func manifest(named name: String) -> PluginManifest? {
+        lock.lock()
+        defer { lock.unlock() }
+        return manifests.first(where: { $0.name == name })
     }
 }

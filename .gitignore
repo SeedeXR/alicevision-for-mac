@@ -86,6 +86,7 @@ meshroom-mac/.pytest_cache/
 meshroom-mac/data/
 meshroom-mac/docs/build/
 meshroom-mac/docs/source/generated/
+.meshroom-venv/
 
 # ---------- Test datasets ----------
 # Downloadable from sources documented in `docs/user/pipeline.md`.
@@ -109,3 +110,14 @@ memory/
 books/
 # Author-local instructions:
 instructions/
+
+# ---------- AI segmentation models ----------
+# Large ONNX / CoreML model files downloaded by
+# `scripts/download_models.py`. Too big for git (BiRefNet-general
+# is ~973 MB). The folder itself is tracked (with README) but
+# model files are not.
+ai-models/*.onnx
+ai-models/*.mlpackage
+ai-models/*.mlmodel
+ai-models/*.bin
+ai-models/.cache/

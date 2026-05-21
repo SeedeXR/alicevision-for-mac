@@ -1,0 +1,1 @@
+../plugins/ai-segmentation/scripts/download_models.py

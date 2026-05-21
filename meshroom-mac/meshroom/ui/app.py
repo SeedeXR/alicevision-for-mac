@@ -10,8 +10,18 @@ from PySide6 import QtCore
 from PySide6.QtCore import QUrl, QJsonValue, qInstallMessageHandler, QtMsgType, QSettings
 from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlDebuggingEnabler
+from PySide6.QtQuick import QQuickWindow, QSGRendererInterface
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication
+
+# Force the Metal RHI backend BEFORE QApplication is constructed.
+# Apple's OpenGL drivers on macOS 26.5 are deprecated/broken and crash
+# inside QRhi::endFrame → glDrawElements. QSG_RHI_BACKEND=metal env var
+# is silently ignored on this Qt 6.11.1 build, so we call the API
+# directly. Required for Apple Silicon stability — the QtQuick scene
+# graph uses Metal; Qt3D (when present) will not be able to share
+# contexts, but we already gate Viewer3D off via ENABLE_VIEWER3D.
+QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.Metal)
 
 import meshroom
 from meshroom.core import pluginManager
@@ -24,7 +34,17 @@ from meshroom.env import EnvVar, EnvVarHelpAction
 from meshroom.ui import components
 from meshroom.ui.components.clipboard import ClipboardHelper
 from meshroom.ui.components.filepath import FilepathHelper
-from meshroom.ui.components.scene3D import Scene3DHelper, Transformations3DHelper
+# scene3D imports PySide6.Qt3DCore + Qt3DRender at module load time. Just
+# loading those PySide6 modules registers Qt3D with the QML engine, which
+# in turn forces QtQuick's QRhi onto the OpenGL backend (Qt3D's Scene3D
+# embedding cannot share a Metal context with QtQuick on macOS). On macOS
+# 26.5 Apple Silicon, Apple's deprecated OpenGL driver crashes inside
+# QRhi::endFrame / glDrawElements. We defer the import behind the same
+# Viewer3D toggle that gates the 3D viewer panel itself. Track B B4
+# ships a native Metal viewer; this lazy load is the bridge until then.
+ENABLE_VIEWER3D = os.environ.get("MESHROOM_ENABLE_VIEWER3D", "0") == "1"
+if ENABLE_VIEWER3D:
+    from meshroom.ui.components.scene3D import Scene3DHelper, Transformations3DHelper
 from meshroom.ui.components.scriptEditor import ScriptEditorManager
 from meshroom.ui.components.thumbnail import ThumbnailCache
 from meshroom.ui.components.messaging import MessageController
@@ -294,8 +314,17 @@ class MeshroomApp(QApplication):
         #  - declaring them as singleton in qmldir file causes random crash at exit
         # => expose them as context properties instead
         self.engine.rootContext().setContextProperty("Filepath", FilepathHelper(parent=self))
-        self.engine.rootContext().setContextProperty("Scene3DHelper", Scene3DHelper(parent=self))
-        self.engine.rootContext().setContextProperty("Transformations3DHelper", Transformations3DHelper(parent=self))
+        # Exposed to QML so the Viewer3D Loader can gate its `active` property
+        # on a value that's NOT persisted across sessions (QML's `Settings` cache
+        # remembers showViewer3D=true from prior runs and overrides menu defaults).
+        # When false, the panel3dViewerLoader stays inactive, Viewer3D.qml never
+        # loads its Qt3D imports, and the OpenGL pipeline-state crash doesn't fire.
+        self.engine.rootContext().setContextProperty("_viewer3DAvailable", ENABLE_VIEWER3D)
+        if ENABLE_VIEWER3D:
+            # Only register when Viewer3D is enabled; see comments above the
+            # ENABLE_VIEWER3D gate at the top of this file.
+            self.engine.rootContext().setContextProperty("Scene3DHelper", Scene3DHelper(parent=self))
+            self.engine.rootContext().setContextProperty("Transformations3DHelper", Transformations3DHelper(parent=self))
         self.engine.rootContext().setContextProperty("Clipboard", ClipboardHelper(parent=self))
         self.engine.rootContext().setContextProperty("ThumbnailCache", ThumbnailCache(parent=self))
         self.engine.rootContext().setContextProperty("ShapeFilesHelper", ShapeFilesHelper(self.activeProject, parent=self))
@@ -364,6 +393,13 @@ class MeshroomApp(QApplication):
         self.engine.load(os.path.normpath(url))
 
     def terminateManual(self):
+        # Shut down the class-level ThumbnailCache executor before the engine
+        # goes away so any in-flight thumbnail requests don't trip over a
+        # half-destroyed QML context.
+        try:
+            ThumbnailCache.workerThreads.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            logging.warning("ThumbnailCache.workerThreads shutdown failed", exc_info=True)
         self.engine.clearComponentCache()
         self.engine.collectGarbage()
         self.engine.deleteLater()

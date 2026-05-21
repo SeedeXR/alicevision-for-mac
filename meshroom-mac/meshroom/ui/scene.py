@@ -3,7 +3,7 @@ import logging
 import math
 import os
 from collections.abc import Iterable
-from multiprocessing.pool import ThreadPool
+from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
 from typing import Callable
 
@@ -382,7 +382,9 @@ class Scene(UIGraph):
 
         self._currentViewPath = ""
 
-        self._workerThreads = ThreadPool(processes=1)
+        # concurrent.futures.ThreadPoolExecutor avoids the
+        # multiprocessing.pool.ThreadPool POSIX-semaphore leak at shutdown.
+        self._workerThreads = ThreadPoolExecutor(max_workers=1)
 
         # react to internal graph changes to update those variables
         self.graphChanged.connect(self.onGraphChanged)
@@ -393,8 +395,15 @@ class Scene(UIGraph):
         self.setDefaultPipeline(defaultPipeline)
 
     def __del__(self):
-        self._workerThreads.terminate()
-        self._workerThreads.join()
+        self._workerThreads.shutdown(wait=False, cancel_futures=True)
+
+    def stopChildThreads(self):
+        """ Shut down Scene's worker pool, then the UIGraph parent's pools. """
+        try:
+            self._workerThreads.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            logging.warning("Scene._workerThreads shutdown failed", exc_info=True)
+        super().stopChildThreads()
 
     def setActive(self, active):
         self._active = active
@@ -437,7 +446,7 @@ class Scene(UIGraph):
     @Slot()
     def reloadPlugins(self):
         """ Launch _reloadPlugins in a worker thread to avoid blocking the ui. """
-        self._workerThreads.apply_async(func=self._reloadPlugins, args=())
+        self._workerThreads.submit(self._reloadPlugins)
 
     def _reloadPlugins(self):
         """
@@ -712,8 +721,8 @@ class Scene(UIGraph):
                     else:
                         p = position
                     cameraInit = self.addNewNode("CameraInit", position=p)
-            self._workerThreads.apply_async(func=self.importImagesSync,
-                                            args=(filesByType["images"], cameraInit,))
+            self._workerThreads.submit(self.importImagesSync,
+                                       filesByType["images"], cameraInit)
         if filesByType["videos"]:
             if self.nodes:
                 boundingBox = self.layout.boundingBox()
@@ -852,7 +861,7 @@ class Scene(UIGraph):
             # Create a CameraInit node if none exists
             self.cameraInit = self.addNewNode("CameraInit")
         if filesByType.images:
-            self._workerThreads.apply_async(func=self.importImagesSync, args=(filesByType.images, self.cameraInit,))
+            self._workerThreads.submit(self.importImagesSync, filesByType.images, self.cameraInit)
 
     @Slot("QVariant")
     def importImagesUrls(self, imagePaths, recursive=False):
@@ -937,7 +946,7 @@ class Scene(UIGraph):
         Args:
             cameraInit (Node): the CameraInit node
         """
-        self._workerThreads.apply_async(func=self.buildIntrinsics, args=(cameraInit, (), True,))
+        self._workerThreads.submit(self.buildIntrinsics, cameraInit, (), True)
 
     def onIntrinsicsAvailable(self, cameraInit, views, intrinsics, rebuild=False):
         """ Update CameraInit with given views and intrinsics. """

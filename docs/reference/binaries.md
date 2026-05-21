@@ -173,3 +173,27 @@ All 12 binaries expect:
 Set via `scripts/run_meshroom.sh` for Meshroom-driven runs. See
 [User → Running the pipeline](../user/pipeline.md) for direct invocation
 examples.
+
+## Python-only nodes (not binaries)
+
+### `SegmentationBiRefNet`
+
+!!! note "Listed here for completeness"
+    `SegmentationBiRefNet` is a **Python Meshroom node**, not an
+    `aliceVision_*` CLI binary. It executes in-process via
+    `rembg` + ONNX Runtime (CoreML EP) — no CMake target, no
+    `default.metallib` dependency, no `cuda_*` adapter forwarder.
+
+AI-powered foreground/background segmentation. Produces per-view
+masks consumed by downstream nodes (`DepthMap`, `Meshing`,
+`Texturing`).
+
+| Input | Output | Notes |
+|---|---|---|
+| `CameraInit.output` (image list) | `{nodeCacheFolder}/masks/{imageStem}_mask.png` | BiRefNet ONNX → CoreML (ANE + GPU + CPU). See [Segmentation reference](segmentation.md) for the full parameter list. |
+
+Full docs:
+
+- User guide: [AI segmentation](../user/segmentation.md)
+- Developer guide: [Segmentation pipeline](../dev/segmentation-pipeline.md)
+- Reference (flags, env vars): [Segmentation reference](segmentation.md)

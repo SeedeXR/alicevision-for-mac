@@ -75,6 +75,7 @@ nav:
     - user/pipeline.md
     - user/native-ui.md
     - user/meshroom.md
+    - user/segmentation.md
     - user/troubleshooting.md
   - Developer Guide:
     - dev/overview.md
@@ -83,11 +84,14 @@ nav:
     - dev/adding-kernel.md
     - dev/adapter.md
     - dev/perf.md
+    - dev/segmentation-pipeline.md
+    - dev/apple-silicon-optimization.md
     - dev/testing.md
   - Reference:
     - reference/binaries.md
     - reference/cmake-options.md
     - reference/kernels.md
+    - reference/segmentation.md
     - reference/mental-notes.md
   - Release notes:
     - changelog.md

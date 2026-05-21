@@ -1706,11 +1706,13 @@ class BaseNode(BaseObject):
                 logging.warning(f"Could not create chunks from cache: {e}")
                 return
         s = self.globalStatus
-        if self.nodeDesc.hasPreprocess:
+        # Skip preprocess/postprocess introspection when the node's plugin
+        # type failed to load (CompatibilityNode → nodeDesc is None).
+        if self.nodeDesc is not None and self.nodeDesc.hasPreprocess:
             if not self._preprocessChunk:
                 raise ValueError("No preprocess chunk")
             self._preprocessChunk.updateStatusFromCache()
-        if self.nodeDesc.hasPostprocess:
+        if self.nodeDesc is not None and self.nodeDesc.hasPostprocess:
             if not self._postprocessChunk:
                 raise ValueError("No postprocess chunk")
             self._postprocessChunk.updateStatusFromCache()
@@ -1987,7 +1989,8 @@ class BaseNode(BaseObject):
             return Status.INPUT
         if not self._chunksCreated:
             # If the preprocess chunk failed we might not reach the chunk creation part
-            if self.nodeDesc.hasPreprocess and self._preprocessChunk._status.status in anyOf:
+            if (self.nodeDesc is not None and self.nodeDesc.hasPreprocess
+                    and self._preprocessChunk._status.status in anyOf):
                 return self._preprocessChunk._status.status
             # Get status from nodeStatus
             return self._nodeStatus.status
@@ -2339,9 +2342,11 @@ class BaseNode(BaseObject):
     chunksChanged = Signal()
     chunks = Property(Variant, getChunks, notify=chunksChanged)
     allChunks = Property(Variant, getAllChunks, notify=chunksChanged)
-    hasPreprocessChunk = Property(bool, lambda self: self.nodeDesc.hasPreprocess, notify=chunksChanged)
+    # Guard against CompatibilityNode (nodeDesc=None) so QML bindings
+    # don't raise AttributeError on every model refresh.
+    hasPreprocessChunk = Property(bool, lambda self: bool(self.nodeDesc and self.nodeDesc.hasPreprocess), notify=chunksChanged)
     preprocessChunk = Property(Variant, lambda self: self._preprocessChunk, notify=chunksChanged)
-    hasPostprocessChunk = Property(bool, lambda self: self.nodeDesc.hasPostprocess, notify=chunksChanged)
+    hasPostprocessChunk = Property(bool, lambda self: bool(self.nodeDesc and self.nodeDesc.hasPostprocess), notify=chunksChanged)
     postprocessChunk = Property(Variant, lambda self: self._postprocessChunk, notify=chunksChanged)
     chunkPlaceholder = Property(Variant, lambda self: self._chunkPlaceholder, notify=chunksChanged)
     nbParallelizationBlocks = Property(int, lambda self: len(self._chunks) if self._chunksCreated else 0, notify=chunksChanged)

@@ -1015,9 +1015,16 @@ Page {
                 }
                 MenuItem {
                     id: viewer3DVisibilityCB
-                    text: "3D Viewer"
+                    text: _viewer3DAvailable ? "3D Viewer" : "3D Viewer (unavailable on macOS)"
                     checkable: true
-                    checked: true
+                    enabled: _viewer3DAvailable
+                    // Default OFF on macOS-arm64 + Qt 6.11.1: Qt3D's Scene3D
+                    // forces QtQuick onto the OpenGL/Metal RHI backend with a
+                    // pipeline-state that crashes on macOS 26.5 Apple Silicon.
+                    // The disabled menu reflects that the panel won't load
+                    // until a native Metal viewer ships (Track B B4).
+                    // Launch with MESHROOM_ENABLE_VIEWER3D=1 to try anyway.
+                    checked: false
                 }
                 MenuItem {
                     id: imageGalleryVisibilityCB

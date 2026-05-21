@@ -235,7 +235,12 @@ Item {
 
             Loader {
                 id: panel3dViewerLoader
-                active: settingsUILayout.showViewer3D
+                // Doubly gated: the per-session menu toggle AND the Python-side
+                // _viewer3DAvailable context property. The context property is
+                // false unless MESHROOM_ENABLE_VIEWER3D=1 is set, preventing the
+                // Qt3D Scene3D pipeline-state crash on macOS 26.5 Apple Silicon
+                // regardless of what QSettings persisted from a previous run.
+                active: _viewer3DAvailable && settingsUILayout.showViewer3D
                 visible: active
                 anchors.fill: parent
                 sourceComponent: panel3dViewerComponent

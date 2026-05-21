@@ -1,0 +1,1 @@
+../../../plugins/ai-segmentation/nodes/aliceVision/SegmentationBiRefNet.py

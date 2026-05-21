@@ -35,13 +35,38 @@ struct NodePalettePanel: View {
         "Meshing",
         "MeshFiltering",
         "Texturing",
+        // AI / segmentation block — Python-only node that produces per-view
+        // masks (rembg + BiRefNet via ONNX Runtime + CoreML).  Sits between
+        // PrepareDenseScene and Texturing in a typical pipeline, but we
+        // surface it after the main reconstruction nodes so the palette's
+        // top-down ordering still reads "main pipeline first, optional /
+        // alternative stages after".  Listed alongside `ImportMiddlebury`
+        // as another "optional ingest/auxiliary" entry.
+        "SegmentationBiRefNet",
         "ImportMiddlebury",
     ]
 
     /// SF Symbol per node type.  Picked for rough semantic fit; chosen for
     /// availability across macOS 14+ rather than icon "correctness".  Falls
     /// back to a generic shape for unknown types.
+    ///
+    /// After the S53 plugin refactor, icons for plugin-supplied nodes
+    /// (e.g. `SegmentationBiRefNet`) are read from the discovered plugin
+    /// manifests via `PluginRegistry.shared` rather than being hardcoded
+    /// in this switch.  The core-binary icons stay hardcoded because they
+    /// ship as part of the Swift binary.
     static func iconName(forType nodeType: String) -> String {
+        // Touch `NodeBinary.specs` so its lazy initialiser fires — that's
+        // what populates `PluginRegistry.shared` as a side effect of
+        // discovering plugins.  Idempotent and cheap after the first call.
+        _ = NodeBinary.specs
+        // Plugin-declared nodes win — let third-party plugins fully own
+        // their visual identity without patching this file.
+        for manifest in PluginRegistry.shared.all {
+            if let node = manifest.nodes.first(where: { $0.name == nodeType }) {
+                return node.icon
+            }
+        }
         switch nodeType {
         case "CameraInit":          return "camera"
         case "FeatureExtraction":   return "dot.scope"

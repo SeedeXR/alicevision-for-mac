@@ -7,7 +7,8 @@ Native Apple Silicon Metal port of [AliceVision](https://alicevision.org/)
 **Status** (plain text — CI wiring deferred):
 
 - `ctest -j8`: **37/37** pass reliably
-- `swift test`: **151/151** pass (native SwiftUI)
+- `swift test`: **170/170** pass (native SwiftUI; +14 SegmentationBiRefNet, +5 PluginRegistry)
+- `pytest tests/python`: **11 passed, 1 skipped** (segmentation helpers + plugin manifest + ONNX_FORCE_CPU; E2E gated on `RUN_SEG_E2E=1`)
 - `release`: `build/release/alicevision-for-mac-0.1.0-arm64.tar.gz` (15 MB) + `-dSYM.tar.gz` (161 MB)
 - `version`: 0.1.0
 - `target`: macOS 14+ on Apple Silicon (arm64)
@@ -37,7 +38,16 @@ Native Apple Silicon Metal port of [AliceVision](https://alicevision.org/)
   (verified end-to-end on the Monstree dataset; produces textured 3D mesh).
 - **Release tarballs** at `build/release/` — small binary + separate
   debug-symbol bundle (canonical Apple split).
-- **Comprehensive docs site** at `docs/` (MkDocs Material, 19 pages, 16
+- **AI-powered foreground segmentation** (`SegmentationBiRefNet` node,
+  CoreML + ANE) — see [docs/user/segmentation.md](docs/user/segmentation.md).
+- **Native plugin system** at `plugins/` — third parties can ship AI
+  extensions via a self-contained `plugin.json` manifest. AI segmentation
+  is the first plugin; contract documented at
+  [docs/dev/plugin-system.md](docs/dev/plugin-system.md).
+- **Apple Silicon optimization deep-dive** —
+  [docs/dev/apple-silicon-optimization.md](docs/dev/apple-silicon-optimization.md):
+  UMA, Metal, ANE, CPU performance with measured numbers.
+- **Comprehensive docs site** at `docs/` (MkDocs Material, 24 pages, 21
   Mermaid diagrams, dark mode, search).
 
 ---
@@ -81,7 +91,7 @@ cd meshroom-native && swift run MeshroomNativeApp
 ```
 src/                  Overlay code (MIT): av::gpu, depth_map_metal, MSL shaders
 tests/                C++ ctest suite (37 tests)
-meshroom-native/      Native SwiftUI app (151 tests)
+meshroom-native/      Native SwiftUI app (170 tests)
 docs/                 MkDocs Material doc source
 cmake/                Build helpers (Metal.cmake, UpstreamShim.cmake, shims/)
 patches/              Patches against upstream Meshroom (not modifying upstream/)
@@ -119,7 +129,7 @@ Full layout in [`docs/dev/codebase-navigation.md`](docs/dev/codebase-navigation.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
 - Open an issue before any non-trivial PR.
-- Tests must pass: `ctest -j8: 37/37` + `swift test: 151/151`.
+- Tests must pass: `ctest -j8: 37/37` + `swift test: 170/170` + `pytest tests/python: 11 passed, 1 skipped`.
 - For perf changes: include before/after numbers via `AV_PROFILE_ADAPTER=ON`.
 - For numerical-kernel changes: validate against a CPU-FP64 reference.
 - Don't modify `upstream/` (it's a read-only symlink).
