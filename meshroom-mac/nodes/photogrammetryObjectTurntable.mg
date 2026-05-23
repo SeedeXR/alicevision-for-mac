@@ -9,12 +9,11 @@
             "DepthMapFilter": "4.0",
             "FeatureExtraction": "1.3",
             "FeatureMatching": "2.0",
-            "ImageDetectionPrompt": "1.0",
             "ImageMatching": "2.0",
-            "ImageSegmentationBox": "1.0",
             "MeshFiltering": "3.0",
             "Meshing": "7.0",
             "PrepareDenseScene": "3.1",
+            "SegmentationBiRefNet": "2.0",
             "StructureFromMotion": "3.3",
             "Texturing": "6.0"
         },
@@ -58,8 +57,8 @@
                 0
             ],
             "inputs": {
-                "input": "{ImageSegmentationBox_1.input}",
-                "masksFolder": "{ImageSegmentationBox_1.output}"
+                "input": "{SegmentationBiRefNet_1.input}",
+                "masksFolder": "{SegmentationBiRefNet_1.output}"
             }
         },
         "FeatureMatching_1": {
@@ -76,22 +75,6 @@
                 "minRequired2DMotion": 3.0
             }
         },
-        "ImageDetectionPrompt_1": {
-            "nodeType": "ImageDetectionPrompt",
-            "position": [
-                200,
-                0
-            ],
-            "inputs": {
-                "input": "{CameraInit_1.output}",
-                "prompt": "main",
-                "synonyms": "",
-                "forceDetection": true
-            },
-            "internalInputs": {
-                "color": "#575963"
-            }
-        },
         "ImageMatching_1": {
             "nodeType": "ImageMatching",
             "position": [
@@ -105,17 +88,17 @@
                 ]
             }
         },
-        "ImageSegmentationBox_1": {
-            "nodeType": "ImageSegmentationBox",
+        "SegmentationBiRefNet_1": {
+            "nodeType": "SegmentationBiRefNet",
             "position": [
                 400,
                 0
             ],
             "inputs": {
-                "input": "{ImageDetectionPrompt_1.input}",
-                "bboxFolder": "{ImageDetectionPrompt_1.output}",
-                "keepFilename": true,
-                "extensionOut": "png"
+                "input": "{CameraInit_1.output}",
+                "modelVariant": "birefnet-lite",
+                "maskFormat": "png",
+                "keepFilename": true
             },
             "internalInputs": {
                 "color": "#575963"
@@ -151,7 +134,7 @@
             "inputs": {
                 "input": "{StructureFromMotion_1.output}",
                 "masksFolders": [
-                    "{ImageSegmentationBox_1.output}"
+                    "{SegmentationBiRefNet_1.output}"
                 ]
             }
         },

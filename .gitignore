@@ -122,3 +122,4 @@ ai-models/*.bin
 ai-models/.cache/
 
 models/
+bugs/

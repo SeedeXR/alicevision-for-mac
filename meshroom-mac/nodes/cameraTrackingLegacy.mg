@@ -15,16 +15,15 @@
             "ExportDistortion": "2.0",
             "FeatureExtraction": "1.3",
             "FeatureMatching": "2.0",
-            "ImageDetectionPrompt": "1.0",
             "ImageMatching": "2.0",
             "ImageMatchingMultiSfM": "1.0",
-            "ImageSegmentationBox": "1.0",
             "KeyframeSelection": "5.0",
             "MeshDecimate": "1.0",
             "MeshFiltering": "3.0",
             "Meshing": "7.0",
             "PrepareDenseScene": "3.1",
             "ScenePreview": "2.0",
+            "SegmentationBiRefNet": "2.0",
             "SfMTransfer": "2.1",
             "SfMTriangulation": "1.0",
             "StructureFromMotion": "3.3",
@@ -182,7 +181,7 @@
             ],
             "inputs": {
                 "input": "{ApplyCalibration_1.output}",
-                "masksFolder": "{ImageSegmentationBox_1.output}",
+                "masksFolder": "{SegmentationBiRefNet_1.output}",
                 "maskExtension": "exr"
             },
             "internalInputs": {
@@ -237,19 +236,6 @@
             "internalInputs": {
                 "label": "FeatureMatchingFramesToKeyframes",
                 "color": "#80766f"
-            }
-        },
-        "ImageDetectionPrompt_1": {
-            "nodeType": "ImageDetectionPrompt",
-            "position": [
-                0,
-                200
-            ],
-            "inputs": {
-                "input": "{CameraInit_1.output}"
-            },
-            "internalInputs": {
-                "color": "#575963"
             }
         },
         "ImageMatchingMultiSfM_1": {
@@ -308,16 +294,16 @@
                 "color": "#80766f"
             }
         },
-        "ImageSegmentationBox_1": {
-            "nodeType": "ImageSegmentationBox",
+        "SegmentationBiRefNet_1": {
+            "nodeType": "SegmentationBiRefNet",
             "position": [
                 200,
                 200
             ],
             "inputs": {
-                "input": "{ImageDetectionPrompt_1.input}",
-                "bboxFolder": "{ImageDetectionPrompt_1.output}",
-                "maskInvert": true,
+                "input": "{CameraInit_1.output}",
+                "modelVariant": "birefnet-lite",
+                "maskFormat": "png",
                 "keepFilename": true
             },
             "internalInputs": {
@@ -394,7 +380,7 @@
             "inputs": {
                 "input": "{SfMTriangulation_1.output}",
                 "masksFolders": [
-                    "{ImageSegmentationBox_1.output}"
+                    "{SegmentationBiRefNet_1.output}"
                 ],
                 "maskExtension": "exr"
             },
@@ -427,7 +413,7 @@
                 "cameras": "{ConvertSfMFormat_1.output}",
                 "model": "{MeshDecimate_1.output}",
                 "undistortedImages": "{ExportAnimatedCamera_1.outputUndistorted}",
-                "masks": "{ImageSegmentationBox_1.output}"
+                "masks": "{SegmentationBiRefNet_1.output}"
             },
             "internalInputs": {
                 "color": "#4c594c"

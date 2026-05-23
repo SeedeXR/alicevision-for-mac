@@ -5,6 +5,9 @@ def registerTypes():
     from meshroom.ui.components.edge import EdgeMouseArea
     from meshroom.ui.components.filepath import FilepathHelper
     from meshroom.ui.components.scene3D import Scene3DHelper, TrackballController, Transformations3DHelper
+    from meshroom.ui.components.scenePreviewLoader import ScenePreviewLoader
+    from meshroom.ui.components.pointCloudGeometry import PointCloudGeometry
+    from meshroom.ui.components.frustumGeometry import FrustumGeometry
     from meshroom.ui.components.csvData import CsvData
     from meshroom.ui.components.geom2D import Geom2D
     from meshroom.ui.components.scriptEditor import PySyntaxHighlighter
@@ -17,6 +20,12 @@ def registerTypes():
     qmlRegisterType(Scene3DHelper, "Meshroom.Helpers", 1, 0, "Scene3DHelper")  # TODO: uncreatable
     qmlRegisterType(Transformations3DHelper, "Meshroom.Helpers", 1, 0, "Transformations3DHelper")  # TODO: uncreatable
     qmlRegisterType(TrackballController, "Meshroom.Helpers", 1, 0, "TrackballController")
+    # Mac-native ScenePreview loader — feeds MetalScenePreview viewer.
+    qmlRegisterType(ScenePreviewLoader, "Meshroom.Helpers", 1, 0, "ScenePreviewLoader")
+    # Mac-native PLY point-cloud geometry for the MetalScenePreview viewer.
+    qmlRegisterType(PointCloudGeometry, "Meshroom.Helpers", 1, 0, "PointCloudGeometry")
+    # Camera frustum wireframe (line-list) geometry for per-view markers.
+    qmlRegisterType(FrustumGeometry, "Meshroom.Helpers", 1, 0, "FrustumGeometry")
     qmlRegisterType(CsvData, "DataObjects", 1, 0, "CsvData")
     qmlRegisterType(LogLinesModel, "DataObjects", 1, 0, "LogLinesModel")
     qmlRegisterType(PySyntaxHighlighter, "ScriptEditor", 1, 0, "PySyntaxHighlighter")

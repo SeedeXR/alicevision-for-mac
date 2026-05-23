@@ -13,11 +13,11 @@
             "FeatureExtraction": "1.3",
             "FeatureMatching": "2.0",
             "ImageMatching": "2.0",
-            "ImageSegmentationSam3": "1.0",
             "IntrinsicsTransforming": "1.1",
             "NodalSfM": "2.0",
             "RelativePoseEstimating": "3.1",
             "ScenePreview": "2.0",
+            "SegmentationBiRefNet": "2.0",
             "TracksBuilding": "1.0"
         },
         "template": true
@@ -130,8 +130,8 @@
                 2
             ],
             "inputs": {
-                "input": "{ImageSegmentationSam3_1.input}",
-                "masksFolder": "{ImageSegmentationSam3_1.output}"
+                "input": "{SegmentationBiRefNet_1.input}",
+                "masksFolder": "{SegmentationBiRefNet_1.output}"
             },
             "internalInputs": {
                 "color": "#80766f"
@@ -169,15 +169,16 @@
                 "color": "#80766f"
             }
         },
-        "ImageSegmentationSam3_1": {
-            "nodeType": "ImageSegmentationSam3",
+        "SegmentationBiRefNet_1": {
+            "nodeType": "SegmentationBiRefNet",
             "position": [
                 -10,
                 2
             ],
             "inputs": {
                 "input": "{CameraInit_1.output}",
-                "maskInvert": true,
+                "modelVariant": "birefnet-lite",
+                "maskFormat": "exr",
                 "keepFilename": true
             },
             "internalInputs": {
@@ -238,7 +239,7 @@
                 "cameras": "{ConvertSfMFormat_1.output}",
                 "model": "{NodalSfM_1.output}",
                 "undistortedImages": "{ExportImages_1.output}",
-                "masks": "{ImageSegmentationSam3_1.output}",
+                "masks": "{SegmentationBiRefNet_1.output}",
                 "pointCloudParams": {
                     "particleSize": 0.001,
                     "particleColor": "Red"

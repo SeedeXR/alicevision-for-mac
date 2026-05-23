@@ -13,7 +13,6 @@
             "ExportDistortion": "2.0",
             "ExportImages": "1.1",
             "GeometricFilterEstimating": "1.0",
-            "ImageSegmentationSam3": "1.0",
             "IntrinsicsTransforming": "1.1",
             "KeyframeSelection": "5.0",
             "MatchMasking": "1.0",
@@ -22,6 +21,7 @@
             "RomaReducer": "1.0",
             "RomaSampler": "1.0",
             "ScenePreview": "2.0",
+            "SegmentationBiRefNet": "2.0",
             "SfMBootStrapping": "4.2",
             "SfMColorizing": "1.0",
             "SfMExpanding": "2.3",
@@ -193,15 +193,16 @@
                 "color": "#575963"
             }
         },
-        "ImageSegmentationSam3_1": {
-            "nodeType": "ImageSegmentationSam3",
+        "SegmentationBiRefNet_1": {
+            "nodeType": "SegmentationBiRefNet",
             "position": [
                 205.0,
                 210.0
             ],
             "inputs": {
                 "input": "{CameraInit_1.output}",
-                "maskInvert": true,
+                "modelVariant": "birefnet-lite",
+                "maskFormat": "exr",
                 "keepFilename": true
             },
             "internalInputs": {
@@ -247,7 +248,7 @@
                 "imagePairsList": "{RomaMatcher_1.imagePairsList}",
                 "warpFolder": "{RomaMatcher_1.outputWarpFolder}",
                 "certaintyFolder": "{RomaMatcher_1.outputCertaintyFolder}",
-                "masksFolder": "{ImageSegmentationSam3_1.output}"
+                "masksFolder": "{SegmentationBiRefNet_1.output}"
             },
             "internalInputs": {
                 "color": "#575963"
@@ -364,7 +365,7 @@
                 "cameras": "{ConvertSfMFormat_1.output}",
                 "model": "{ConvertSfMFormat_1.input}",
                 "undistortedImages": "{ExportImages_1.output}",
-                "masks": "{ImageSegmentationSam3_1.output}"
+                "masks": "{SegmentationBiRefNet_1.output}"
             },
             "internalInputs": {
                 "color": "#4c594c"

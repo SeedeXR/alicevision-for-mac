@@ -160,7 +160,9 @@ Item {
     MouseArea {
         id: mouseArea
         anchors.fill: parent
-        property double factor: 1.15
+        // 1.2 (20% per wheel notch) matches Viewer2D and feels snappier
+        // than 1.15 (15%). Bumped 2026-05-23.
+        property double factor: 1.2
         property bool removingEdges: false
         // Activate multisampling for edges antialiasing
         layer.enabled: true
@@ -172,7 +174,51 @@ Item {
         drag.smoothed: false
         cursorShape: drag.target == draggable ? Qt.ClosedHandCursor : removingEdges ? Qt.CrossCursor : Qt.ArrowCursor
 
+        // Trackpad pinch-zoom (macOS Apple Silicon). PinchHandler is a
+        // Qt 6 Pointer Handler — coexists with MouseArea (no exclusivity
+        // conflict). Uses `activeScale` (delta-from-gesture-start) to
+        // compute incremental zoom around the pinch centroid, mirroring
+        // the wheel-zoom math above so behavior is identical between
+        // mouse-wheel + Ctrl-scroll + trackpad-pinch.
+        PinchHandler {
+            id: pinchHandler
+            target: null  // we apply scale to draggable ourselves
+            property real lastScale: 1.0
+            onActiveChanged: if (active) lastScale = 1.0
+            onActiveScaleChanged: {
+                if (!active) return
+                var step = activeScale / lastScale
+                lastScale = activeScale
+                var newScale = draggable.scale * step
+                newScale = Math.min(Math.max(minZoom, newScale), maxZoom)
+                if (draggable.scale === newScale) return
+                var c = centroid.position
+                var p = mapToItem(draggable, c.x, c.y)
+                draggable.x += (1 - step) * p.x * draggable.scale
+                draggable.y += (1 - step) * p.y * draggable.scale
+                draggable.scale = newScale
+                workspaceMoved()
+            }
+        }
+
         onWheel: function(wheel) {
+            // On Apple Silicon trackpads, two-finger drag generates wheel
+            // events with `pixelDelta` populated (and no Ctrl modifier).
+            // We treat those as a pan gesture; only mouse-wheel scrolls
+            // (which have angleDelta but a zero pixelDelta) or explicit
+            // Ctrl+scroll perform zoom.
+            var isTrackpadPan =
+                (wheel.modifiers & Qt.ControlModifier) === 0
+                && (wheel.pixelDelta.x !== 0 || wheel.pixelDelta.y !== 0)
+                && Math.abs(wheel.pixelDelta.y) < 50  // sanity: pinch sends large deltas
+
+            if (isTrackpadPan) {
+                draggable.x += wheel.pixelDelta.x
+                draggable.y += wheel.pixelDelta.y
+                workspaceMoved()
+                return
+            }
+
             var zoomFactor = wheel.angleDelta.y > 0 ? factor : 1 / factor
             var scale = draggable.scale * zoomFactor
             scale = Math.min(Math.max(minZoom, scale), maxZoom)
@@ -183,6 +229,15 @@ Item {
             draggable.y += (1 - zoomFactor) * point.y * draggable.scale
             draggable.scale = scale
             workspaceMoved()
+        }
+
+        // Double-click on empty canvas fits the whole graph to the
+        // viewport — the most discoverable rescue from "I'm lost in
+        // the graph", complementing the existing F key shortcut.
+        onDoubleClicked: function(mouse) {
+            if (mouse.button === Qt.LeftButton && mouse.modifiers === Qt.NoModifier) {
+                fit()
+            }
         }
 
         onPressed: function(mouse) {

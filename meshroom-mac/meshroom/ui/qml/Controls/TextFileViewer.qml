@@ -189,7 +189,7 @@ Item {
                 // TextMetrics for line numbers column
                 TextMetrics {
                     id: lineMetrics
-                    font.family: "Monospace, Consolas, Monaco"
+                    font.family: "Menlo"  // macOS-native monospace (was "Monospace, Consolas, Monaco" — Qt rejects comma-fallback lists on macOS)
                     text: textView.count * 10
                 }
 
@@ -293,7 +293,7 @@ Item {
                             TextInput {
                                 wrapMode: Text.WrapAnywhere
                                 text: logLine.line
-                                font.family: "Monospace, Consolas, Monaco"
+                                font.family: "Menlo"  // macOS-native monospace (was "Monospace, Consolas, Monaco" — Qt rejects comma-fallback lists on macOS)
                                 padding: 0
                                 selectByMouse: true
                                 readOnly: true

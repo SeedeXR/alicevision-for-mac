@@ -1,0 +1,3 @@
+module MetalViewer3D
+MetalScenePreview 1.0 MetalScenePreview.qml
+CameraFrustumGroup 1.0 CameraFrustumGroup.qml

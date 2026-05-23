@@ -89,7 +89,15 @@ FocusScope {
 
     Component.onCompleted: {
         if (!aliceVisionPluginAvailable) {
-            console.warn("Missing plugin qtAliceVision.")
+            // The qtAliceVision C++ plugin (HDR / panorama / feature overlays)
+            // is not built on the macOS port. The 2D viewer gracefully falls
+            // back to Qt's standard Image element for 8-bit display. The 3D
+            // viewer is unaffected. Demoted from console.warn to console.info
+            // because this is the EXPECTED state on Mac, not an error.
+            // See memory/qtalicevision_status.md for the porting plan.
+            console.info("qtAliceVision plugin not built (macOS port). " +
+                         "HDR, panorama, lens-distortion, and feature-overlay " +
+                         "viewers fall back to standard Qt Image.")
             displayHDR.checked = false
         }
     }

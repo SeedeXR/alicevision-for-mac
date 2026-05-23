@@ -220,6 +220,8 @@ DepthMap when those nodes are pointed at `masksFolder=<this node>/`.
             processed = 0
             skipped = 0
             failures: list[str] = []
+            cumulative_predict_s = 0.0
+            t_loop_start = time.time()
 
             for idx, (view_id, image_path) in enumerate(views, start=1):
                 dest = self._mask_path(
@@ -242,12 +244,17 @@ DepthMap when those nodes are pointed at `masksFolder=<this node>/`.
                     t_img = time.time()
                     src = Image.open(image_path).convert("RGB")
                     src_arr = np.asarray(src, dtype=np.uint8)
+                    t_predict = time.time()
                     mask = sess.predict(src_arr)
+                    predict_s = time.time() - t_predict
+                    cumulative_predict_s += predict_s
                     self._save_mask(mask, dest, mask_ext)
                     processed += 1
                     log.info(
-                        f"  [{idx}/{len(views)}] {Path(image_path).name} -> "
-                        f"{dest.name} ({time.time() - t_img:.2f}s)"
+                        f"  [{idx}/{len(views)}] {Path(image_path).name} "
+                        f"({src.size[0]}x{src.size[1]}) -> {dest.name} "
+                        f"(predict={predict_s*1000:.0f}ms, "
+                        f"total={time.time() - t_img:.2f}s)"
                     )
                 except Exception as exc:
                     log.error(
@@ -255,10 +262,15 @@ DepthMap when those nodes are pointed at `masksFolder=<this node>/`.
                     )
                     failures.append(image_path)
 
+            loop_s = time.time() - t_loop_start
+            avg_predict_ms = (
+                cumulative_predict_s * 1000 / processed if processed else 0.0
+            )
             log.info(
                 f"[SegmentationBiRefNet] done: processed={processed}, "
                 f"skipped={skipped}, failed={len(failures)}, "
-                f"total={len(views)}"
+                f"total={len(views)}, "
+                f"wall={loop_s:.1f}s, avg_predict={avg_predict_ms:.0f}ms/view"
             )
             if failures and processed == 0:
                 raise RuntimeError(

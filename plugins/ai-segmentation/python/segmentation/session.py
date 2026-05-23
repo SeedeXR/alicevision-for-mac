@@ -153,33 +153,53 @@ def get_session(variant: str = "birefnet-lite") -> BiRefNetCoreMLSession:
     before the first real frame.
     """
     if variant in _SESSION_CACHE:
+        log.info(
+            f"[SegmentationBiRefNet] reusing cached session for {variant}"
+        )
         return _SESSION_CACHE[variant]
+
+    import time
 
     pkg = _resolve_package_path(variant)
     log.info(
-        f"[SegmentationBiRefNet] Loading {pkg.name} (cpuAndGPU)"
+        f"[SegmentationBiRefNet] Loading {pkg.name} "
+        f"({pkg.parent}) (cpuAndGPU)"
     )
 
     # Import lazily so this module is cheap to import in tests that don't
     # actually load a model.
     import coremltools as ct
 
+    t_load = time.time()
     mlmodel = ct.models.MLModel(
         str(pkg),
         compute_units=ct.ComputeUnit.CPU_AND_GPU,
+    )
+    load_s = time.time() - t_load
+    log.info(
+        f"[SegmentationBiRefNet] mlpackage loaded in {load_s:.2f}s "
+        f"(coremltools {ct.__version__})"
     )
 
     # Warm-up. The first predict is much slower than steady state because
     # CoreML JIT-compiles the Metal pipelines lazily.
     warmup = np.zeros((1, 3, INPUT_HW, INPUT_HW), dtype=np.float32)
+    t_warm = time.time()
     try:
         mlmodel.predict({"input": warmup})
+        log.info(
+            f"[SegmentationBiRefNet] Metal pipeline JIT warmup done in "
+            f"{time.time() - t_warm:.2f}s"
+        )
     except Exception as exc:  # noqa: BLE001 — keep going; first predict can fail on garbage input
         log.warning(f"[SegmentationBiRefNet] warmup predict failed (ignored): {exc}")
 
     sess = BiRefNetCoreMLSession(variant, mlmodel, pkg)
     _SESSION_CACHE[variant] = sess
-    log.info(f"[SegmentationBiRefNet] Session ready for variant={variant}")
+    log.info(
+        f"[SegmentationBiRefNet] Session ready for variant={variant} "
+        f"(total {time.time() - t_load:.2f}s)"
+    )
     return sess
 
 

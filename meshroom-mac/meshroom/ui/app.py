@@ -40,11 +40,17 @@ from meshroom.ui.components.filepath import FilepathHelper
 # embedding cannot share a Metal context with QtQuick on macOS). On macOS
 # 26.5 Apple Silicon, Apple's deprecated OpenGL driver crashes inside
 # QRhi::endFrame / glDrawElements. We defer the import behind the same
-# Viewer3D toggle that gates the 3D viewer panel itself. Track B B4
-# ships a native Metal viewer; this lazy load is the bridge until then.
+# Viewer3D toggle that gates the 3D viewer panel itself.
 ENABLE_VIEWER3D = os.environ.get("MESHROOM_ENABLE_VIEWER3D", "0") == "1"
 if ENABLE_VIEWER3D:
     from meshroom.ui.components.scene3D import Scene3DHelper, Transformations3DHelper
+
+# Mac-native QtQuick3D viewer (lands 2026-05-23, see
+# meshroom/ui/qml/MetalViewer3D/). Uses Qt RHI's Metal backend natively;
+# does NOT pull Qt3D into the QML engine, so it coexists with QtQuick on
+# macOS 26.5 Apple Silicon without the Scene3D context-sharing crash.
+# Default: ON. Opt-out via MESHROOM_ENABLE_METAL_VIEWER3D=0.
+ENABLE_METAL_VIEWER3D = os.environ.get("MESHROOM_ENABLE_METAL_VIEWER3D", "1") == "1"
 from meshroom.ui.components.scriptEditor import ScriptEditorManager
 from meshroom.ui.components.thumbnail import ThumbnailCache
 from meshroom.ui.components.messaging import MessageController
@@ -320,6 +326,7 @@ class MeshroomApp(QApplication):
         # When false, the panel3dViewerLoader stays inactive, Viewer3D.qml never
         # loads its Qt3D imports, and the OpenGL pipeline-state crash doesn't fire.
         self.engine.rootContext().setContextProperty("_viewer3DAvailable", ENABLE_VIEWER3D)
+        self.engine.rootContext().setContextProperty("_metalViewer3DAvailable", ENABLE_METAL_VIEWER3D)
         if ENABLE_VIEWER3D:
             # Only register when Viewer3D is enabled; see comments above the
             # ENABLE_VIEWER3D gate at the top of this file.

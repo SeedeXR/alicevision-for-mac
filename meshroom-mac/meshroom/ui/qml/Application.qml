@@ -664,13 +664,35 @@ Page {
         }
     }
 
-    header: RowLayout {
-        spacing: 0
+    // Wrap the header in a ToolBar (Qt Quick Controls 2 idiom for
+    // Page.header). The 2026-05-23 first attempt at this bug just
+    // added `implicitHeight: 36` to a bare RowLayout — that pinned the
+    // slot but didn't fix MenuBar collapsing inside it on macOS 26.5 +
+    // Qt 6.11.1 + Fusion. Wrapping in ToolBar:
+    //   * Gives Page its canonical header container (auto-sized by Qt)
+    //   * Mirrors the footer: ToolBar { ... } already used at line 1180
+    //   * Provides an explicit background Rectangle so the toolbar is
+    //     always visually anchored even if children collapse
+    //   * Lets us anchor.fill the inner RowLayout to the ToolBar's
+    //     content area instead of relying on RowLayout's implicit size
+    header: ToolBar {
+        id: headerToolBar
+        padding: 0
+        implicitHeight: 36
+        palette.window: Qt.darker(activePalette.window, 1.15)
+        background: Rectangle {
+            color: Qt.darker(activePalette.window, 1.15)
+        }
+
+        RowLayout {
+            anchors.fill: parent
+            spacing: 0
         MaterialToolButton {
             id: homeButton
             text: MaterialIcons.home
 
             font.pointSize: 18
+            Layout.fillHeight: true
 
             background: Rectangle {
                 color: homeButton.hovered ? activePalette.highlight : Qt.darker(activePalette.window, 1.15)
@@ -690,6 +712,13 @@ Page {
             }
         }
         MenuBar {
+            // Force the MenuBar to participate in the RowLayout's
+            // vertical sizing — without this, Qt's macOS native-menu
+            // routing makes the MenuBar widget collapse to 0 height and
+            // the row implicitly inherits that, even though we set
+            // implicitHeight on the ToolBar. Layout.fillHeight forces it.
+            Layout.fillHeight: true
+            Layout.preferredHeight: 36
             palette.window: Qt.darker(activePalette.window, 1.15)
             Menu {
                 title: "File"
@@ -1166,7 +1195,8 @@ Page {
                 border.color: Qt.darker(activePalette.window, 1.15)
             }
         }
-    }
+        }  // RowLayout
+    }      // header: ToolBar
 
     footer: ToolBar {
         id: footer

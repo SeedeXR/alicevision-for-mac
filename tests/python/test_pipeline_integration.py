@@ -42,13 +42,26 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 COVERAGE_SCRIPT = REPO_ROOT / "scripts" / "pipeline_coverage.py"
 RUN_MESHROOM = REPO_ROOT / "scripts" / "run_meshroom.sh"
 TEMPLATES_DIR = REPO_ROOT / "meshroom-mac" / "nodes"
-DATASET = REPO_ROOT / "dataset_monstree" / "mini3"
 BUILD_DIR = REPO_ROOT / "build"
+
+# Dataset selector. Default mini3 keeps the test fast (~35-55s per
+# pipeline on M-series). Set `PIPELINE_DATASET=mini6` for a 6-photo
+# mid-tier test (~2-3 min), or `PIPELINE_DATASET=full` for the 41-photo
+# battle test (~25-35 min, production-readiness signal).
+_DATASET_NAME = os.environ.get("PIPELINE_DATASET", "mini3")
+DATASET = REPO_ROOT / "dataset_monstree" / _DATASET_NAME
 
 # Templates we EXPECT to be fully covered as long as the 12 standard
 # native binaries from Phase 11 are present in ./build/. If this list
 # shrinks (e.g. someone removes a binary), the coverage assertion fires.
-EXPECTED_COVERED = {"photogrammetryDraft", "photogrammetryLegacy"}
+EXPECTED_COVERED = {
+    "photogrammetryDraft", "photogrammetryLegacy",
+    # photogrammetryObject + photogrammetryObjectTurntable: SAM-purged
+    # 2026-05-23 (ImageSegmentationBox + ImageDetectionPrompt → SegmentationBiRefNet)
+    # and verified end-to-end on Monstree mini3: each produced a
+    # texturedMesh.obj + 3 BiRefNet masks (~400 ms/view, png format).
+    "photogrammetryObject", "photogrammetryObjectTurntable",
+}
 
 # Templates we know will fail because they require binaries we have NOT
 # built. If new binaries land (Phase 13-14), we move them out of here
@@ -63,8 +76,7 @@ EXPECTED_UNCOVERED = {
     "panoramaFisheyeHdr", "panoramaHdr",
     "photogrammetry",  # modern SfM, needs Phase 14 binaries
     "photogrammetryAndCameraTracking", "photogrammetryAndCameraTrackingLegacy",
-    "photogrammetryObject", "photogrammetryObjectTurntable",
-    "photogrammetryObjectTwoSides",
+    "photogrammetryObjectTwoSides",  # SAM-purged but not E2E-verified yet
     "photometricStereo", "rawImageConversion",
 }
 
@@ -174,7 +186,12 @@ requires_e2e = pytest.mark.skipif(
 
 
 def _run_pipeline(name: str, out_dir: Path) -> tuple[int, str]:
-    """Invoke meshroom_batch for `name` on the Monstree mini3 dataset.
+    """Invoke meshroom_batch for `name` on the currently-selected dataset.
+
+    The subprocess timeout scales with dataset size — mini3 (3 photos)
+    is bounded by 15 min, but full (41 photos) needs ~30-40 min for
+    photogrammetryLegacy's dense-depth stage. Override with
+    `PIPELINE_TIMEOUT=<seconds>` if needed.
 
     Returns (returncode, combined stdout+stderr).
     """
@@ -190,11 +207,18 @@ def _run_pipeline(name: str, out_dir: Path) -> tuple[int, str]:
         "-p", name,
         "-s", str(project_mg),
     ]
+    n_photos = len(list(DATASET.glob("*.JPG"))) + len(list(DATASET.glob("*.jpg")))
+    # Empirical budget: ~60s/photo for Legacy on M4 (dense depth-map
+    # dominates wall-clock); Draft is ~4x faster but use the same bound.
+    # Floor at 900s so mini3 keeps its existing 15-min ceiling.
+    default_timeout = max(900, 60 * n_photos)
+    timeout_s = int(os.environ.get("PIPELINE_TIMEOUT", default_timeout))
     t0 = time.time()
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
     elapsed = time.time() - t0
     log = (
-        f"--- meshroom_batch '{name}' rc={proc.returncode} elapsed={elapsed:.1f}s ---\n"
+        f"--- meshroom_batch '{name}' rc={proc.returncode} "
+        f"elapsed={elapsed:.1f}s (timeout={timeout_s}s, photos={n_photos}) ---\n"
         + proc.stdout + proc.stderr
     )
     return proc.returncode, log

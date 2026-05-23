@@ -7,6 +7,9 @@ import MaterialIcons 2.2
 import ImageGallery 1.0
 import Viewer 1.0
 import Viewer3D 1.0
+// Mac-native QtQuick3D viewer (default path; coexists with the legacy
+// Qt3D Viewer3D so MESHROOM_ENABLE_VIEWER3D=1 still works for diagnostics).
+import MetalViewer3D 1.0
 
 /**
  * WorkspaceView is an aggregation of Meshroom's main modules.
@@ -21,6 +24,12 @@ Item {
     readonly property variant cameraInits: _currentScene ? _currentScene.cameraInits : null
     property bool readOnly: false
     property alias panel3dViewer: panel3dViewerLoader.item
+    property alias panel3dMetalViewer: panel3dMetalViewerLoader.item
+    // ScenePreview output folder (set when a ScenePreview node finishes).
+    // The Mac-native MetalScenePreview viewer reads scene_preview.json from
+    // this path. The host (NodeEditor / scene controller) sets this when
+    // the user clicks a ScenePreview node or a run completes.
+    property string scenePreviewFolder: ""
     readonly property Viewer2D viewer2D: viewer2D
     readonly property alias imageGallery: imageGallery
     readonly property TextViewer viewerText: textViewer
@@ -233,6 +242,24 @@ Item {
             Layout.fillHeight: true
             implicitWidth: Math.round(parent.width * 0.45)
 
+            // Mac-native QtQuick3D viewer — the DEFAULT 3D path.
+            // Active when:
+            //   (a) the user's "Show 3D Viewer" menu toggle is on, AND
+            //   (b) _metalViewer3DAvailable is true (set by app.py from
+            //       MESHROOM_ENABLE_METAL_VIEWER3D, default "1"), AND
+            //   (c) the legacy Qt3D viewer is NOT explicitly enabled —
+            //       if a user sets MESHROOM_ENABLE_VIEWER3D=1, they want
+            //       the legacy path (probably for diagnostics) and the
+            //       metal viewer steps aside. Mutual exclusivity prevents
+            //       both viewers from racing for the same canvas.
+            Loader {
+                id: panel3dMetalViewerLoader
+                active: _metalViewer3DAvailable && settingsUILayout.showViewer3D && !_viewer3DAvailable
+                visible: active
+                anchors.fill: parent
+                sourceComponent: panel3dMetalViewerComponent
+            }
+
             Loader {
                 id: panel3dViewerLoader
                 // Doubly gated: the per-session menu toggle AND the Python-side
@@ -244,6 +271,48 @@ Item {
                 visible: active
                 anchors.fill: parent
                 sourceComponent: panel3dViewerComponent
+            }
+        }
+
+        Component {
+            id: panel3dMetalViewerComponent
+            Panel {
+                id: panel3dMetalViewer
+                title: "3D Viewer (Metal)"
+                // Page's contentItem auto-sizes when we don't use a
+                // SplitView, but we anchor explicitly to be defensive
+                // against macOS Qt 6.11.1 layout-cycle ordering issues.
+                anchors.fill: parent
+
+                property alias metalViewer: c_metalViewer3D
+
+                MetalScenePreview {
+                    id: c_metalViewer3D
+                    anchors.fill: parent
+                    // Belt and braces: an explicit Layout.fillWidth/
+                    // fillHeight in case a future host wraps this Panel
+                    // in a Layout container.
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    // Bind to the most-recently-computed ScenePreview node's
+                    // output folder. WorkspaceView's host sets this when the
+                    // user selects a ScenePreview node in the graph, or when
+                    // a pipeline run finishes.
+                    scenePreviewFolder: root.scenePreviewFolder
+
+                    DropArea {
+                        anchors.fill: parent
+                        keys: ["text/uri-list"]
+                        onDropped: function(drop) {
+                            if (drop.urls && drop.urls.length > 0) {
+                                // Accept a single ScenePreview output folder dragged in.
+                                let path = drop.urls[0].toString()
+                                if (path.startsWith("file://")) path = path.substring(7)
+                                c_metalViewer3D.scenePreviewFolder = path
+                            }
+                        }
+                    }
+                }
             }
         }
 

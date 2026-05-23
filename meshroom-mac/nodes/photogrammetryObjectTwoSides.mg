@@ -10,13 +10,12 @@
             "DepthMapFilter": "4.0",
             "FeatureExtraction": "1.3",
             "FeatureMatching": "2.0",
-            "ImageDetectionPrompt": "1.0",
             "ImageMatching": "2.0",
             "ImageMatchingMultiSfM": "1.0",
-            "ImageSegmentationBox": "1.0",
             "MeshFiltering": "3.0",
             "Meshing": "7.0",
             "PrepareDenseScene": "3.1",
+            "SegmentationBiRefNet": "2.0",
             "SfMMerge": "3.0",
             "SfMTransform": "3.1",
             "SfMTriangulation": "1.0",
@@ -137,8 +136,8 @@
                 300
             ],
             "inputs": {
-                "input": "{ImageSegmentationBox_1.input}",
-                "masksFolder": "{ImageSegmentationBox_1.output}"
+                "input": "{SegmentationBiRefNet_1.input}",
+                "masksFolder": "{SegmentationBiRefNet_1.output}"
             }
         },
         "FeatureExtraction_4": {
@@ -148,8 +147,8 @@
                 600
             ],
             "inputs": {
-                "input": "{ImageSegmentationBox_2.input}",
-                "masksFolder": "{ImageSegmentationBox_2.output}"
+                "input": "{SegmentationBiRefNet_2.input}",
+                "masksFolder": "{SegmentationBiRefNet_2.output}"
             }
         },
         "FeatureMatching_1": {
@@ -225,34 +224,6 @@
                 "input": "{ImageMatching_4.input}",
                 "featuresFolders": "{ImageMatching_4.featuresFolders}",
                 "imagePairsList": "{ImageMatching_4.output}"
-            }
-        },
-        "ImageDetectionPrompt_1": {
-            "nodeType": "ImageDetectionPrompt",
-            "position": [
-                200,
-                300
-            ],
-            "inputs": {
-                "input": "{CameraInit_1.output}",
-                "prompt": "main",
-                "synonyms": "",
-                "forceDetection": true,
-                "thresholdDetection": 0.3
-            }
-        },
-        "ImageDetectionPrompt_2": {
-            "nodeType": "ImageDetectionPrompt",
-            "position": [
-                200,
-                600
-            ],
-            "inputs": {
-                "input": "{CameraInit_2.output}",
-                "prompt": "main",
-                "synonyms": "",
-                "forceDetection": true,
-                "thresholdDetection": 0.3
             }
         },
         "ImageMatchingMultiSfM_1": {
@@ -333,30 +304,36 @@
                 ]
             }
         },
-        "ImageSegmentationBox_1": {
-            "nodeType": "ImageSegmentationBox",
+        "SegmentationBiRefNet_1": {
+            "nodeType": "SegmentationBiRefNet",
             "position": [
                 400,
                 300
             ],
             "inputs": {
-                "input": "{ImageDetectionPrompt_1.input}",
-                "bboxFolder": "{ImageDetectionPrompt_1.output}",
-                "keepFilename": true,
-                "extensionOut": "png"
+                "input": "{CameraInit_1.output}",
+                "modelVariant": "birefnet-lite",
+                "maskFormat": "png",
+                "keepFilename": true
+            },
+            "internalInputs": {
+                "color": "#575963"
             }
         },
-        "ImageSegmentationBox_2": {
-            "nodeType": "ImageSegmentationBox",
+        "SegmentationBiRefNet_2": {
+            "nodeType": "SegmentationBiRefNet",
             "position": [
                 400,
                 600
             ],
             "inputs": {
-                "input": "{ImageDetectionPrompt_2.input}",
-                "bboxFolder": "{ImageDetectionPrompt_2.output}",
-                "keepFilename": true,
-                "extensionOut": "png"
+                "input": "{CameraInit_2.output}",
+                "modelVariant": "birefnet-lite",
+                "maskFormat": "png",
+                "keepFilename": true
+            },
+            "internalInputs": {
+                "color": "#575963"
             }
         },
         "MeshFiltering_3": {
@@ -395,8 +372,8 @@
             "inputs": {
                 "input": "{SfMTransform_1.output}",
                 "masksFolders": [
-                    "{ImageSegmentationBox_1.output}",
-                    "{ImageSegmentationBox_2.output}"
+                    "{SegmentationBiRefNet_1.output}",
+                    "{SegmentationBiRefNet_2.output}"
                 ]
             },
             "internalInputs": {

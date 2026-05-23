@@ -17,7 +17,6 @@
             "FeatureMatching": "2.0",
             "ImageMatching": "2.0",
             "ImageMatchingMultiSfM": "1.0",
-            "ImageSegmentationSam3": "1.0",
             "IntrinsicsTransforming": "1.1",
             "KeyframeSelection": "5.0",
             "MeshDecimate": "1.0",
@@ -25,6 +24,7 @@
             "Meshing": "7.0",
             "RelativePoseEstimating": "3.1",
             "ScenePreview": "2.0",
+            "SegmentationBiRefNet": "2.0",
             "SfMBootStrapping": "4.2",
             "SfMColorizing": "1.0",
             "SfMExpanding": "2.3",
@@ -204,7 +204,7 @@
             ],
             "inputs": {
                 "input": "{ApplyCalibration_1.output}",
-                "masksFolder": "{ImageSegmentationSam3_1.output}",
+                "masksFolder": "{SegmentationBiRefNet_1.output}",
                 "maskExtension": "exr"
             },
             "internalInputs": {
@@ -317,15 +317,16 @@
                 "color": "#80766f"
             }
         },
-        "ImageSegmentationSam3_1": {
-            "nodeType": "ImageSegmentationSam3",
+        "SegmentationBiRefNet_1": {
+            "nodeType": "SegmentationBiRefNet",
             "position": [
                 197.0,
                 201.0
             ],
             "inputs": {
                 "input": "{CameraInit_1.output}",
-                "maskInvert": true,
+                "modelVariant": "birefnet-lite",
+                "maskFormat": "exr",
                 "keepFilename": true
             },
             "internalInputs": {
@@ -446,7 +447,7 @@
                 "cameras": "{ConvertSfMFormat_1.output}",
                 "model": "{MeshDecimate_1.output}",
                 "undistortedImages": "{ExportImages_2.output}",
-                "masks": "{ImageSegmentationSam3_1.output}"
+                "masks": "{SegmentationBiRefNet_1.output}"
             },
             "internalInputs": {
                 "color": "#4c594c"

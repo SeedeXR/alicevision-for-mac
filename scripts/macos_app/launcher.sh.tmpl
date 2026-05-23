@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# Meshroom.app launcher
+#
+# This script is the `CFBundleExecutable` for the .app bundle. It
+# resolves bundle-relative paths and execs the Python Meshroom UI inside
+# the bundled venv. Mirrors `scripts/run_meshroom.sh` but everything is
+# relative to `Contents/Resources/`.
+#
+# Bundle layout (produced by `scripts/package_macos_app.sh`):
+#
+#   Meshroom.app/
+#   └── Contents/
+#       ├── Info.plist
+#       ├── MacOS/
+#       │   └── meshroom              (this script, executable)
+#       └── Resources/
+#           ├── ai-models/             (BiRefNet .mlpackage models)
+#           ├── alicevision/           (12 binaries + default.metallib + share/)
+#           ├── meshroom-mac/          (Meshroom Python package + node descriptors)
+#           ├── meshroom-venv/         (relocated Python venv with PySide6 etc.)
+#           ├── plugins/               (ai-segmentation plugin)
+#           └── python_shim/           (pyalicevision shim)
+#
+set -e
+
+# Resolve the bundle root regardless of how the .app was launched.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RES="$(cd "$SCRIPT_DIR/../Resources" && pwd)"
+
+# Bring the bundled venv onto PATH. Note: `source .../activate` modifies
+# PS1/PATH; we want the python interpreter resolution only, so prepend
+# the venv bin dir explicitly and skip the activation banner.
+export PATH="$RES/meshroom-venv/bin:$PATH"
+export VIRTUAL_ENV="$RES/meshroom-venv"
+
+# AliceVision runtime (12 native binaries + default.metallib + sensor DB / OCIO).
+export ALICEVISION_ROOT="$RES/alicevision"
+export ALICEVISION_BIN_PATH="$RES/alicevision"
+export ALICEVISION_SENSOR_DB="$RES/alicevision/share/aliceVision/cameraSensors.db"
+export ALICEVISION_OCIO="$RES/alicevision/share/aliceVision/config.ocio"
+# Bundled Homebrew dylibs (boost, ceres, openimageio, etc.). Until the
+# packaging step copies + rewrites @rpath, fall back to Homebrew at
+# /opt/homebrew/lib so a dev-mode .app still works on the build machine.
+if [ -d "$RES/lib" ]; then
+    export ALICEVISION_LIBPATH="$RES/lib"
+    export DYLD_FALLBACK_LIBRARY_PATH="$RES/lib"
+else
+    export ALICEVISION_LIBPATH="/opt/homebrew/lib"
+    export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib"
+fi
+
+# AI segmentation models — BiRefNet .mlpackage staging area.
+export AV_AI_MODELS_DIR="$RES/ai-models"
+# Legacy env var also honoured by the plugin.
+export U2NET_HOME="$RES/ai-models"
+
+# Meshroom plugin discovery — point at bundled descriptors + plugin nodes.
+# Multiple paths can be separated by ':'; meshroom_batch concatenates them.
+export MESHROOM_NODES_PATH="$RES/meshroom-mac/nodes:$RES/plugins/ai-segmentation/nodes"
+export MESHROOM_PIPELINE_TEMPLATES_PATH="$RES/meshroom-mac/nodes"
+
+# PYTHONPATH:
+#   meshroom-mac          → Meshroom Python package with macOS patches
+#   python_shim           → pyalicevision (parallelization + hdr + sfmData stubs)
+#   plugins/ai-segmentation/python  → segmentation.session + utils
+export PYTHONPATH="$RES/meshroom-mac:$RES/python_shim:$RES/plugins/ai-segmentation/python"
+
+# Default cwd inside meshroom-mac so bin/meshroom_batch's relative
+# imports resolve.
+cd "$RES/meshroom-mac"
+
+# If the launcher was invoked with arguments (e.g. via `open
+# Meshroom.app --args -i …`), pass them through to meshroom_batch.
+# Otherwise launch the Qt UI.
+if [ $# -gt 0 ]; then
+    exec "$RES/meshroom-venv/bin/python" "$RES/meshroom-mac/bin/meshroom_batch" "$@"
+else
+    exec "$RES/meshroom-venv/bin/python" "$RES/meshroom-mac/meshroom/ui/__main__.py"
+fi
