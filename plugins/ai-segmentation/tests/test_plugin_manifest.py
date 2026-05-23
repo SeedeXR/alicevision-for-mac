@@ -41,8 +41,12 @@ def manifest() -> dict:
 
 
 def test_manifest_parses_with_required_fields(manifest):
-    """`plugin.json` must declare the fields the Swift loader reads."""
-    required = {"name", "version", "description", "nodes", "wrapper_script"}
+    """`plugin.json` must declare the core descriptor fields."""
+    # `wrapper_script` was retired 2026-05-23 when the Swift loader that
+    # consumed it was decommissioned (see CHANGELOG: meshroom-native).
+    # The Python Meshroom discovers descriptors via MESHROOM_NODES_PATH
+    # directly, so the manifest no longer needs to spell out a wrapper.
+    required = {"name", "version", "description", "nodes"}
     missing = required - manifest.keys()
     assert not missing, f"plugin.json missing required keys: {missing}"
     assert manifest["name"] == "ai-segmentation"
@@ -72,9 +76,7 @@ def test_manifest_node_names_match_node_files(manifest):
 
 
 def test_manifest_referenced_paths_exist(manifest):
-    """wrapper_script, python.package_path, models_dir must all resolve."""
-    wrapper = (PLUGIN_ROOT / manifest["wrapper_script"]).resolve()
-    assert wrapper.is_file(), f"wrapper_script does not exist: {wrapper}"
+    """python.package_path and models_dir must all resolve."""
     # The python package_path field points at the dir holding the
     # `segmentation/` Python package this plugin ships.
     py_cfg = manifest.get("python", {})
@@ -83,17 +85,26 @@ def test_manifest_referenced_paths_exist(manifest):
     assert (pkg / "segmentation" / "__init__.py").is_file(), (
         "segmentation package init missing"
     )
+    # `models_dir` is optional but if present must resolve to a dir.
+    if "models_dir" in manifest:
+        models = (PLUGIN_ROOT / manifest["models_dir"]).resolve()
+        assert models.is_dir(), f"models_dir does not exist: {models}"
 
 
 def test_model_variants_table(manifest):
-    """`model_variants` must list every BiRefNet variant we ship."""
+    """`model_variants` must list every BiRefNet CoreML variant we ship."""
+    # The rembg/ONNX backend was removed 2026-05-23; only the two
+    # CoreML mlpackage variants ship now.
     variants = manifest.get("model_variants", [])
     assert variants, "model_variants must be a non-empty array"
     ids = {v["id"] for v in variants}
-    assert ids == {"birefnet-general", "birefnet-dis", "birefnet-lite"}, (
+    assert ids == {"birefnet-lite", "birefnet-general"}, (
         f"unexpected model_variants ids: {ids}"
     )
     for v in variants:
-        for key in ("id", "size_mb", "backbone"):
+        for key in ("id", "size_mb", "backbone", "package"):
             assert key in v, f"variant {v.get('id')} missing key {key!r}"
         assert isinstance(v["size_mb"], (int, float)) and v["size_mb"] > 0
+        assert v["package"].endswith(".mlpackage"), (
+            f"variant {v['id']} package must be a .mlpackage, got {v['package']}"
+        )

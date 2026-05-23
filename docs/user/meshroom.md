@@ -120,12 +120,14 @@ PYTHONPATH=$ROOT/meshroom-mac:$ROOT/src/python_shim
 ```
 
 `src/python_shim` carries a tiny pure-Python `pyalicevision` shim used by
-some Meshroom node descriptors for sizing decisions (currently stubbed; full
-binding deferred — see `memory/native_ui_design.md`).
+some Meshroom node descriptors for sizing decisions (the `DynamicViewsSize`
+fix for `prepareDenseScene` lives here — see
+[Developer → Segmentation pipeline](../dev/segmentation-pipeline.md) for
+the related node-descriptor patterns).
 
-## Use the native SwiftUI app instead
+## On the (retired) SwiftUI prototype
 
-For a Python-free experience see [Native macOS UI](native-ui.md). The
-SwiftUI app reads the same `.mg` files and runs the same 12 binaries
-through a Swift `Process` orchestrator. It is missing the 3D viewer and
-some node types (M7+); for those, Meshroom is still required.
+An earlier 0.1.0 release shipped a parallel native SwiftUI Meshroom
+prototype at `meshroom-native/`. It was retired on 2026-05-23 to consolidate
+work on the upstream-compatible PySide6 Meshroom (this page). Going forward
+there is one Meshroom frontend on macOS.

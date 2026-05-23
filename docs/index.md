@@ -3,14 +3,16 @@
 **AliceVision photogrammetry + Meshroom on Apple Silicon Metal.**
 
 12 native ARM64 binaries. End-to-end pipeline (raw photos → textured 3D mesh).
-Native SwiftUI macOS replacement for Meshroom. Open-source, MPL-2.0.
+Drives upstream's PySide6 Meshroom on Apple Silicon. AI foreground segmentation
+via BiRefNet CoreML. Open-source, MPL-2.0.
 
-!!! info "Status (2026-05-20)"
+!!! info "Status (2026-05-23)"
     Full pipeline runs end-to-end on `dataset_monstree/mini3` (3 JPGs @ 4032×3024)
     producing a textured 3D mesh in roughly 1 minute on an M4.
-    Validation suite: **37/37 ctest pass** on a clean build. The native SwiftUI
-    `meshroom-native` app is at milestone M6 (graph editor with drag-to-connect
-    edges) with **115 Swift tests** passing.
+    Validation suite: **37/37 ctest pass** on a clean build,
+    **11 passed / 1 skipped** in `pytest tests/python`. The standalone SwiftUI
+    prototype was decommissioned 2026-05-23; the only Meshroom frontend going
+    forward is upstream's PySide6 Meshroom run via `meshroom-mac/`.
 
 ---
 
@@ -36,10 +38,10 @@ The result:
 - **Meshroom integration via 4 Darwin patches** that add macOS support to
   upstream Meshroom without modifying its tree. See
   [User → Meshroom integration](user/meshroom.md).
-- **Native SwiftUI Meshroom replacement** (`meshroom-native/`) that reads
-  Meshroom's `.mg` project files losslessly and runs the same `aliceVision_*`
-  binaries through a Swift `Process` orchestrator. See
-  [User → Native macOS UI](user/native-ui.md).
+- **AI foreground segmentation** via the `SegmentationBiRefNet` Meshroom node
+  backed by pre-converted CoreML models in `ai-models/` (BiRefNet `lite` and
+  `general`, CPU+GPU compute units). See
+  [User → Segmentation](user/segmentation.md).
 
 ---
 
@@ -72,12 +74,13 @@ The result:
         -p photogrammetryLegacy
     ```
 
-=== "Native SwiftUI app"
+=== "AI segmentation"
 
     ```bash
-    cd meshroom-native
-    swift test                          # 115 tests expected to pass
-    swift run MeshroomNativeApp         # launches the SwiftUI app
+    # Models are pre-shipped at ai-models/ — no download required.
+    # Run the segmentation node through Meshroom; see docs/user/segmentation.md
+    # for the full graph wiring.
+    pytest tests/python -k segmentation     # 11 passed, 1 skipped expected
     ```
 
 ---
@@ -123,15 +126,15 @@ flowchart TB
         S2[src/depth_map_metal/<br/>cuda_* adapter forwarders]
         S3[src/av_gpu/<br/>generic Metal abstraction]
         S4[src/shaders/depth_map/<br/>35 MSL kernel entry points]
-        S5[meshroom-native/<br/>SwiftUI app]
+        S5[ai-models/ + plugins/ai-segmentation/<br/>BiRefNet CoreML]
         S6[meshroom-mac/ + patches/<br/>Meshroom + node descriptors]
     end
     U1 -->|"cuda_* calls"| S2
     S2 --> S3
     S3 --> S4
     U2 -->|compiled via shim| S1
-    S5 -->|spawns| BIN[12 aliceVision_* binaries]
-    S6 -->|spawns| BIN
+    S6 -->|spawns| BIN[12 aliceVision_* binaries]
+    S6 --> S5
     U1 --> BIN
     U2 --> BIN
 ```
@@ -183,8 +186,9 @@ For the layered view, see [Developer → Architecture](dev/architecture.md).
 ## License & upstreams
 
 This port is MPL-2.0, matching upstream AliceVision. Meshroom is also MPL-2.0.
-All Metal kernels, host adapters, the SwiftUI app, and the CMake shim layer
-are new code original to this repository; the upstream tree is consumed
-through a read-only `upstream/` symlink that is never modified on disk.
+All Metal kernels, host adapters, the AI segmentation plugin / model
+conversion code, and the CMake shim layer are new code original to this
+repository; the upstream tree is consumed through a read-only `upstream/`
+symlink that is never modified on disk.
 
 Trademarks and project names belong to their respective owners.

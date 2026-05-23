@@ -1,6 +1,6 @@
 # alicevision-for-mac
 
-> Apple Silicon Metal port of AliceVision photogrammetry + Meshroom orchestration. CUDA-replaced-by-Metal end-to-end: 12 pipeline binaries (cameraInit through texturing) drive a native `av::gpu` Metal abstraction. End-to-end validated on the Monstree mini3 dataset (3 photos → textured 3D mesh). Includes a native SwiftUI Meshroom replacement at `meshroom-native/` (115 Swift tests passing, byte-identical UID hashing for Meshroom-Python interop) and a Python Meshroom integration path via `scripts/run_meshroom.sh`. ctest: 37/37 sequential. Release tarball staged at `build/release/`.
+> Apple Silicon Metal port of AliceVision photogrammetry + Meshroom orchestration. CUDA-replaced-by-Metal end-to-end: 12 pipeline binaries (cameraInit through texturing) drive a native `av::gpu` Metal abstraction. End-to-end validated on the Monstree mini3 dataset (3 photos → textured 3D mesh). The sole Meshroom frontend is upstream's PySide6 Meshroom driven via `meshroom-mac/` + `scripts/run_meshroom.sh` (the earlier SwiftUI prototype was retired 2026-05-23). AI foreground segmentation ships via the `SegmentationBiRefNet` Meshroom node backed by pre-converted CoreML models in `ai-models/` (CPU+GPU; ANE not viable for BiRefNet — see `models/production_note.md`). ctest: 37/37 sequential. Release tarball staged at `build/release/`.
 
 ## Documentation
 - [ARCHITECTURE.md](ARCHITECTURE.md): codebase tour — `av::gpu` + `av::depth_map` layering, upstream overlay model
@@ -16,9 +16,11 @@
 - [cmake/shims/cuda-stubs/](cmake/shims/cuda-stubs/): CUDA-host-API typedef shims (`__half`, `float2`, `cudaStream_t`, …)
 - [third_party/lemon/](third_party/lemon/): vendored LEMON 1.3.1 graph library (Homebrew's `lemon` is unrelated)
 - [third_party/metal-cpp/](third_party/metal-cpp/): vendored Apple metal-cpp headers
-- [tests/](tests/): 38 ctest files — kernel correctness, end-to-end pipeline, shim conformance
-- [meshroom-native/](meshroom-native/): native SwiftUI Meshroom — `ProjectModel` + `App` modules, 115 tests
-- [meshroom-native/Sources/App/NodeUIDHasher.swift](meshroom-native/Sources/App/NodeUIDHasher.swift): byte-identical Meshroom-compatible UID hashing
+- [tests/](tests/): 38 ctest files — kernel correctness, end-to-end pipeline, shim conformance; plus `tests/python/` for pytest-driven Meshroom and segmentation tests
+- [ai-models/](ai-models/): pre-converted CoreML BiRefNet packages (`BiRefNet_lite.mlpackage` 90 MB, `BiRefNet.mlpackage` 447 MB), shipped as the segmentation node's default models
+- [models/](models/): HuggingFace BiRefNet checkpoints + conversion scripts (`models/convert/convert_to_coreml.py`)
+- [models/production_note.md](models/production_note.md): ANE-not-viable analysis + measured CPU/GPU latency on Apple Silicon
+- [plugins/ai-segmentation/](plugins/ai-segmentation/): native plugin manifest for AI segmentation
 - [build/release/alicevision-for-mac-0.1.0-arm64.tar.gz](build/release/alicevision-for-mac-0.1.0-arm64.tar.gz): 15.4 MB release tarball (12 binaries + `default.metallib` + `share/aliceVision/`)
 - [scripts/run_meshroom.sh](scripts/run_meshroom.sh): drives Python Meshroom against our Apple Silicon binaries
 - [dataset_monstree/](dataset_monstree/): end-to-end smoke dataset (mini3, mini6, full variants)
@@ -42,8 +44,9 @@
 - [memory/perf_optimization_s44.md](memory/perf_optimization_s44.md): R1 perf optimization round (Gaussian, mipmap)
 - [memory/perf_optimization_s45.md](memory/perf_optimization_s45.md): R2+R3 perf optimizations (cumulative -18.5%)
 - [memory/adapter_audit_s41.md](memory/adapter_audit_s41.md): 12-forwarder adapter conformance audit
-- [memory/native_ui_design.md](memory/native_ui_design.md): SwiftUI Meshroom design doc
 - [memory/dataset_research.md](memory/dataset_research.md): Monstree + Middlebury dataset choices
+- [memory/segmentation_pipeline.md](memory/segmentation_pipeline.md): SegmentationBiRefNet design + BiRefNet CoreML production decision
+- [memory/perf_segmentation_s52.md](memory/perf_segmentation_s52.md): segmentation pipeline perf characterization
 - [memory/full_dataset_run.md](memory/full_dataset_run.md): full Monstree pipeline timing
 - [memory/documentation_links.md](memory/documentation_links.md): curated external references
 - [memory/agent_profile.md](memory/agent_profile.md): how the AI agent operates on this repo

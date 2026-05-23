@@ -8,9 +8,10 @@ sections will be asked for revisions before review. -->
 Fixes # / Refs #
 
 ## Scope
-- [ ] Code (`src/`, `tests/`, `meshroom-native/`)
+- [ ] Code (`src/`, `tests/`, `plugins/`)
 - [ ] Build system (`CMakeLists.txt`, `cmake/`)
 - [ ] Docs (`docs/`, top-level `.md` files, `mkdocs.yml`)
+- [ ] AI models (`ai-models/`, `models/`)
 - [ ] Patches (`patches/`)
 - [ ] CI / tooling (`.github/`, `scripts/`)
 - [ ] Other: ___
@@ -18,7 +19,7 @@ Fixes # / Refs #
 ## Testing
 <!-- Required. Tick every box that applies; explain if blank. -->
 - [ ] `ctest -j8` is 37/37 (or N/N for new tests).
-- [ ] `swift test` (in `meshroom-native/`) is 151/151 (or N/N).
+- [ ] `python -m pytest tests/python` is 11 passed / 1 skipped (or N/N).
 - [ ] New tests added for new functionality.
 - [ ] Existing tests still pass.
 - [ ] For perf changes: before/after numbers via `AV_PROFILE_ADAPTER=ON`

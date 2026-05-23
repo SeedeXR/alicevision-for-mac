@@ -1,9 +1,9 @@
 """
 segmentation.utils
 
-Small helpers shared by the session loader, the CoreML converter, and the
-Meshroom node. Stdlib-only by design — these run during node startup
-before any heavyweight imports happen.
+Small helpers shared by the session loader and the Meshroom node.
+Stdlib + coremltools only — these run during node startup before any
+heavyweight imports happen.
 """
 
 from __future__ import annotations
@@ -45,20 +45,25 @@ def _chip_brand() -> str:
         return ""
 
 
-def available_onnx_providers() -> list[str]:
-    """Return the list of ONNX Runtime execution providers, or [] if missing."""
+def coremltools_version() -> str:
+    """Return the installed coremltools version, or '' if unavailable."""
     try:
-        import onnxruntime as ort  # type: ignore
-        return list(ort.get_available_providers())
+        import coremltools as ct  # type: ignore
+        return str(ct.__version__)
     except Exception:
-        return []
+        return ""
 
 
 def log_compute_backend(log: logging.Logger | None = None,
                         prefix: str = "[SegmentationBiRefNet]") -> dict:
     """
     Emit a one-shot summary of the active compute target so users can verify
-    Metal/ANE dispatch from the Meshroom log.
+    Metal dispatch from the Meshroom log.
+
+    The node ALWAYS targets `MLComputeUnits.cpuAndGPU`. The Apple Neural
+    Engine is not viable for BiRefNet's `ASPPDeformable` decoder — see
+    `models/production_note.md`. If you see the ANE in the log here, the
+    log line is lying.
 
     Returns a dict with the introspected values (useful for tests).
     """
@@ -67,28 +72,31 @@ def log_compute_backend(log: logging.Logger | None = None,
         "platform": platform.system(),
         "machine": platform.machine(),
         "chip": _chip_brand(),
-        "providers": available_onnx_providers(),
+        "coremltools": coremltools_version(),
     }
 
     if info["platform"] != "Darwin":
         log.warning(f"{prefix} Not running on macOS — CoreML unavailable.")
-        info["compute_target"] = "CPU"
+        info["compute_target"] = "UNAVAILABLE"
         return info
 
     if info["chip"]:
         log.info(f"{prefix} Host chip: {info['chip']}")
 
-    if "CoreMLExecutionProvider" in info["providers"]:
-        log.info(f"{prefix} Compute target: CoreML (CPU+GPU+ANE)")
-        info["compute_target"] = "CoreML"
-    else:
-        log.warning(
-            f"{prefix} CoreMLExecutionProvider NOT available — "
-            f"falling back to CPU. Providers: {info['providers']}"
+    if not info["coremltools"]:
+        log.error(
+            f"{prefix} coremltools is not importable — install it in the "
+            f"meshroom-venv before running this node."
         )
-        info["compute_target"] = "CPU"
+        info["compute_target"] = "UNAVAILABLE"
+        return info
 
+    log.info(
+        f"{prefix} Compute target: CoreML (CPU + GPU dispatch, "
+        f"coremltools {info['coremltools']})"
+    )
+    info["compute_target"] = "CoreML"
     return info
 
 
-__all__ = ["expand", "available_onnx_providers", "log_compute_backend"]
+__all__ = ["expand", "coremltools_version", "log_compute_backend"]

@@ -21,6 +21,51 @@ Project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Three `multiprocessing.pool.ThreadPool` instances in `meshroom-mac` (ThumbnailCache.workerThreads, FilesModTimePollerThread._threadPool, Scene._workerThreads) replaced with `concurrent.futures.ThreadPoolExecutor`. The MP pool's internal SimpleQueue+Lock pair stayed registered with `multiprocessing.resource_tracker` under Qt's QObject parent hierarchy, producing a 6-semaphore leak warning at every shutdown. Executor has no such tracker registration.
 - `meshroom-mac/meshroom/ui/__main__.py` SIGINT handler now routes to `QApplication.quit()` so `aboutToQuit` fires on Ctrl-C (previously `signal.SIG_DFL` killed the process at the C level, bypassing Qt teardown).
 
+### Removed
+- **rembg + ONNX Runtime backend removed from `SegmentationBiRefNet` (2026-05-23).**
+  The plugin is now CoreML-only — it loads pre-converted `.mlpackage`
+  models from `ai-models/` via `coremltools` at `MLComputeUnits.cpuAndGPU`.
+  Reason: on Apple Silicon the rembg path ran 6–10 s per frame on the
+  CPU EP and ~233 s per frame on the CoreML EP `CPUAndGPU` mode
+  (Metal command-buffer thrashing in ORT for swin-v1 graphs). The
+  mlpackage path is 350–980 ms per frame depending on variant — 10–35×
+  faster with 5× less memory. The following were deleted:
+  `plugins/ai-segmentation/python/segmentation/convert_to_coreml.py`,
+  `plugins/ai-segmentation/scripts/` (entire dir, including
+  `download_models.py`). `session.py` was rewritten as a thin
+  `coremltools.models.MLModel` wrapper. The node descriptor's
+  `alphaMatting` and `outputResolution` parameters were dropped
+  (rembg-specific and mlpackage-shape-locked, respectively). The
+  `modelVariant` choices are now `birefnet-lite` (default) +
+  `birefnet-general`; `birefnet-dis` was rembg-only. `ONNX_FORCE_CPU=1`
+  is no longer honoured; `AV_AI_MODELS_DIR` is the new env override for
+  the models path.
+- **`meshroom-native/` (Swift / SwiftUI) decommissioned (2026-05-23).** The
+  native SwiftUI Meshroom prototype that shipped in 0.1.0 has been retired.
+  Reason: maintaining two graph-editor frontends (SwiftUI + upstream PySide6)
+  diverged from upstream's evolving node schema and doubled review surface.
+  Going forward there is **one** Meshroom frontend on macOS — upstream's
+  PySide6 Meshroom run via `meshroom-mac/` + `scripts/run_meshroom.sh`. The
+  Swift sources, the `swift test` suite, the `meshroom-native/` documentation,
+  and all references in `docs/`, `README`, `CONTRIBUTING`, `SECURITY` have
+  been removed in this release.
+
+### Added — AI segmentation: BiRefNet CoreML models
+- **Pre-converted BiRefNet CoreML models shipped at `ai-models/`** —
+  `BiRefNet_lite.mlpackage` (90 MB, swin_v1_t backbone) and
+  `BiRefNet.mlpackage` (447 MB, swin_v1_l backbone), both FP16 mlprogram
+  at fixed 1024×1024 input, targeting macOS 14+.
+- **Reproducible CoreML conversion pipeline** at `models/` with conversion
+  scripts (`models/convert/`), HF checkpoint loaders, deformable-conv
+  `grid_sample` patch, validation + benchmark harness. Full how-to at
+  `ai-models/README.md`.
+- **Production note** at `models/production_note.md` capturing the
+  ANE-not-viable finding (BiRefNet's `ASPPDeformable` decoder uses
+  deformable conv v2, which CoreML lowers via `grid_sample`, which the ANE
+  compiler cannot plan — `MLComputeUnits.cpuAndGPU` is mandatory; `.all`
+  hangs in `com.apple.anef.p3`). Production GPU latency: ~350 ms/frame
+  (lite) / ~980 ms/frame (general) at 1024² on Apple Silicon.
+
 ### Fixed
 - `meshroom-mac/meshroom/core/graph.py` + `node.py` — guard `node.nodeDesc` accesses against `None` (CompatibilityNode case). Default templates with unknown node types (`ImageSegmentationSam3`, `ScenePreview`, `MoGe`, etc.) no longer crash graph load with `AttributeError: 'NoneType' object has no attribute 'hasPreprocess'`.
 - `meshroom-mac/nodes/aliceVision/ExtractMetadata.py` — removed dead `import distutils.dir_util` (broken on Python 3.13, never used).

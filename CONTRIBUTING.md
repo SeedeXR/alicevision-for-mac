@@ -2,9 +2,10 @@
 
 Thanks for considering a contribution. This project ports
 [AliceVision](https://alicevision.org) photogrammetry + Meshroom from CUDA
-to native Apple Silicon Metal. The codebase is mature (S0-S49):
-12 pipeline binaries, 32 upstream modules, native SwiftUI Meshroom
-replacement, comprehensive docs.
+to native Apple Silicon Metal. The codebase is mature (S0-S54):
+12 pipeline binaries, 32 upstream modules, upstream-compatible Python
+Meshroom integration, AI segmentation via BiRefNet CoreML, comprehensive
+docs.
 
 This guide tells you **how to get involved**, **what kinds of changes are
 welcome**, and **how to land a pull request**.
@@ -34,8 +35,8 @@ welcome**, and **how to land a pull request**.
    decisions.
 
 3. **Run the existing test suite** before changing anything. You should
-   be at `ctest -j8: 37/37 pass` + `swift test: 151/151 pass`. If you
-   can't get there on `main`, **file a build-issue first** — don't
+   be at `ctest -j8: 37/37 pass` + `pytest tests/python: 11 passed, 1 skipped`.
+   If you can't get there on `main`, **file a build-issue first** — don't
    assume your patch is the cause.
 
 ---
@@ -49,8 +50,9 @@ welcome**, and **how to land a pull request**.
 - **Documentation improvements**: `docs/`, `README.md`, code comments.
   Especially welcome: new "I tried X and it didn't work, here's how to
   unblock" troubleshooting entries.
-- **Native UI features**: `meshroom-native/Sources/App/` (SwiftUI). M10+
-  candidates listed in `docs/user/native-ui.md`.
+- **Meshroom integration improvements**: `meshroom-mac/` patches /
+  `plugins/` AI nodes. Keep changes compatible with upstream's PySide6
+  Meshroom.
 - **Pipeline binary additions**: more `aliceVision_*` binaries from
   `upstream/src/software/pipeline/`. Follow the pattern in
   `docs/dev/adding-a-binary.md`.
@@ -95,7 +97,7 @@ cmake --build build
 
 # 5. Run tests
 cd build && ctest -j8       # should be 37/37
-cd ../meshroom-native && swift test   # should be 151/151
+cd .. && python -m pytest tests/python   # 11 passed, 1 skipped
 ```
 
 See `BUILD.md` for details, troubleshooting, and the Homebrew dep list.
@@ -117,7 +119,7 @@ See `BUILD.md` for details, troubleshooting, and the Homebrew dep list.
 3. **Run tests after every meaningful change**:
    ```bash
    cd build && ninja && ctest -j8
-   cd meshroom-native && swift test
+   cd .. && python -m pytest tests/python
    ```
 
 4. **For kernel work**, also run a profile:
@@ -150,7 +152,8 @@ See `BUILD.md` for details, troubleshooting, and the Homebrew dep list.
   don't enforce clang-format mechanically.
 - **Metal Shading Language**: keep kernel files focused. One concept per
   `.metal` file (e.g., `volume_kernels.metal`, `comp_ncc.metal`).
-- **Swift**: SwiftUI conventions. macOS 14+ APIs only; mark `[VERIFY]` if unsure.
+- **Python**: 3.13, type-hint at module boundaries, follow `meshroom-mac`
+  upstream style. Avoid heavy deps without discussion.
 - **CMake**: `target_*` commands over directory-scoped ones. Quote paths.
 - **Comments**: explain WHY for non-obvious code. Don't restate WHAT.
 
@@ -159,11 +162,12 @@ See `BUILD.md` for details, troubleshooting, and the Homebrew dep list.
 ## Testing requirements
 
 PRs must include:
-- Tests for new functionality (matches existing test patterns under `tests/` for C++ or `meshroom-native/Tests/` for Swift).
+- Tests for new functionality (matches existing test patterns under
+  `tests/` for C++ or `tests/python/` for Python/Meshroom).
 - For numerical-kernel work: validation against a CPU-FP64 reference with
   documented numerical budget (see existing kernel tests for the pattern).
-- For UI work: at least the data-layer tests (gestures are hard to test
-  in XCTest; document any manual smoke tests in the PR).
+- For Meshroom node work: at least a pytest harness covering the node
+  parameter shape + a smoke run on a mini dataset.
 
 PRs that lower test coverage or introduce flaky tests will be asked to
 fix that before review.

@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: A reproducible problem with the pipeline, build, or native UI
+about: A reproducible problem with the pipeline, build, or Meshroom integration
 title: '[BUG] '
 labels: bug
 ---
@@ -24,8 +24,8 @@ labels: bug
 ## Component
 - [ ] Build (`cmake` / `ninja`)
 - [ ] `aliceVision_*` pipeline binary
-- [ ] Native macOS UI (`meshroom-native/`)
-- [ ] Meshroom integration (`meshroom-mac/`)
+- [ ] Meshroom integration (`meshroom-mac/`, `plugins/`)
+- [ ] AI segmentation (`SegmentationBiRefNet`, `ai-models/`)
 - [ ] Docs / install instructions
 
 ## Logs / output
@@ -39,9 +39,9 @@ labels: bug
 </details>
 
 ## Tests
-Did you run `ctest -j8` and `swift test` on a fresh build before reporting? If
-something failed there, paste the failing test's name and output below; the
-fix might be a separate test issue.
+Did you run `ctest -j8` and `python -m pytest tests/python` on a fresh build
+before reporting? If something failed there, paste the failing test's name
+and output below; the fix might be a separate test issue.
 
 ```
 <ctest output or empty>

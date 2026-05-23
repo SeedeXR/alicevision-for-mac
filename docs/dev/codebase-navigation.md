@@ -30,13 +30,23 @@ alicevision-for-mac/
 │   └── python_shim/             pyalicevision Python stand-in (S42)
 │
 ├── tests/                       C++ unit / integration tests (37 ctest)
+│   └── python/                  pytest suite (Meshroom + segmentation)
 │
-├── meshroom-native/             SwiftUI native macOS Meshroom replacement
-│   ├── Package.swift            SPM manifest
-│   ├── Sources/
-│   │   ├── ProjectModel/        .mg round-trip (M1)
-│   │   └── App/                 Viewer + editor + executor (M2-M9)
-│   └── Tests/                   XCTest (151 tests)
+├── ai-models/                   pre-built BiRefNet CoreML mlpackages
+│   ├── BiRefNet_lite.mlpackage  swin_v1_t, 90 MB, ~350 ms/frame (M-series GPU)
+│   └── BiRefNet.mlpackage       swin_v1_l, 447 MB, ~980 ms/frame
+│
+├── models/                      BiRefNet HF checkpoints + CoreML converter
+│   ├── lite/                    swin_v1_t weights + model code
+│   ├── general/                 swin_v1_l weights + model code
+│   ├── convert/                 conversion + validation + benchmarking scripts
+│   └── production_note.md       ANE-not-viable analysis, perf measurements
+│
+├── plugins/ai-segmentation/     AI segmentation Meshroom plugin
+│   ├── plugin.json              manifest
+│   ├── nodes/aliceVision/       SegmentationBiRefNet.py (Meshroom descriptor)
+│   ├── python/segmentation/     rembg/CoreML session helpers
+│   └── tests/                   plugin-local pytest
 │
 ├── docs/                        MkDocs Material source
 │   ├── index.md
@@ -126,7 +136,8 @@ kernels run — everything else is upstream's CPU code.
 | Optimize an existing kernel | `memory/perf_profile_s43.md` → identify hotspot → `src/depth_map_metal/src/Volume.cpp` for host launcher → `src/shaders/depth_map/*.metal` for the kernel |
 | Bridge a new upstream `cuda_*` function | `src/depth_map_metal/src/upstream_adapter.cpp` |
 | Add a pipeline binary | `CMakeLists.txt` → search for `aliceVision_depthMapEstimation` block; copy + adapt |
-| Improve the native UI | `meshroom-native/Sources/App/` |
+| Add an AI plugin | `plugins/<name>/` — see [Plugin system](plugin-system.md) |
+| Re-convert a BiRefNet model | `models/convert/convert_to_coreml.py` — see [ai-models/README.md](../../ai-models/README.md) |
 | Fix a Meshroom integration issue | `patches/meshroom/` or `patches/alicevision-meshroom/` (Python source; .patch format) |
 | Add a doc page | `docs/<section>/<page>.md`; nav in `mkdocs.yml` |
 | Add a Homebrew dep | discuss in an issue first, then `CMakeLists.txt` find_package + `Formula/alicevision-for-mac.rb` depends_on |
@@ -146,8 +157,8 @@ grep -rn 'volume_computeSimilarity' upstream/src/aliceVision/depthMap/
 # Find a CMake target's deps
 grep -B 2 -A 20 'add_library(aliceVision_depthMap STATIC' CMakeLists.txt
 
-# Find the Swift type that handles X in the native UI
-grep -rn 'MGNode' meshroom-native/Sources/
+# Find a Meshroom node descriptor
+grep -rn 'class SegmentationBiRefNet' plugins/
 ```
 
 ## Documentation index

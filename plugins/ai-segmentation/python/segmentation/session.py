@@ -1,139 +1,185 @@
 """
 segmentation.session
 
-CoreML-first rembg session loader.
+CoreML-only BiRefNet session loader for `SegmentationBiRefNet`.
 
-Strategy:
-  1. Force `U2NET_HOME` to <repo>/ai-models/ unless the user overrode it.
-  2. Build a `rembg.new_session(model_name)` with the provider order
-     [CoreMLExecutionProvider, CPUExecutionProvider] so Apple Silicon
-     dispatches to the GPU + Neural Engine via the CoreML EP.
-  3. Cache the loaded session for the lifetime of the Python process so
-     Meshroom chunk re-entry does not re-pay the model-load cost.
-  4. Gracefully fall back to the default rembg provider list (CPU) if
-     onnxruntime is built without the CoreML EP.
+The session opens one of the pre-converted `.mlpackage` files in
+`<repo>/ai-models/` and returns a thin wrapper exposing a single
+`predict(rgb_uint8_HxWx3)` method that returns a `[H, W]` float32 mask
+in `[0, 1]`.
 
-The CoreML EP autopath is the canonical way to use Metal/ANE from ONNX
-Runtime on macOS — we do NOT pre-convert to .mlpackage here; that path
-exists as an optional optimisation in `convert_to_coreml.py`.
+Why CoreML-only:
+  * The rembg + ONNX Runtime path was removed 2026-05-23. On Apple
+    Silicon it was ~10–35× slower than the FP16 mlpackage path (Metal
+    command-buffer thrashing in ONNX Runtime's CoreML EP for swin-v1
+    graphs), and its CPU-only fallback ran at 6–10 s / frame.
+  * The pre-converted mlpackage models load at `cpuAndGPU` in 3–5 s and
+    predict in 350–980 ms per 1024² frame.
+
+Hard rule — load with `MLComputeUnits.cpuAndGPU`. Do NOT pass `.all`
+or `.cpuAndNeuralEngine`: BiRefNet's `ASPPDeformable` decoder lowers
+via `grid_sample`, which the ANE compiler cannot plan; the load call
+hangs in `com.apple.anef.p3` forever. See `models/production_note.md`
+for the full diagnosis.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
-from . import ensure_u2net_home
+import numpy as np
+
+from . import ensure_models_dir
 
 log = logging.getLogger(__name__)
 
 
 # Module-level cache. Survives across Meshroom chunk calls in the same
-# process — critical because loading a 973 MB BiRefNet ONNX takes 5-10s.
-_SESSION_CACHE: dict[str, Any] = {}
+# process — critical because loading the 447 MB general mlpackage takes
+# ~5 s and JIT-compiling the Metal pipelines on first predict adds
+# another second on top.
+_SESSION_CACHE: dict[str, "BiRefNetCoreMLSession"] = {}
 
 
-# Map of friendly CLI aliases -> rembg internal session names. Mirrors the
-# alias map in `scripts/download_models.py`. Users may pass either form.
-_ALIASES: dict[str, str] = {
-    "birefnet-lite": "birefnet-general-lite",
+# User-facing variant id -> mlpackage filename under ai-models/.
+VARIANT_PACKAGES: dict[str, str] = {
+    "birefnet-lite": "BiRefNet_lite.mlpackage",
+    "birefnet-general": "BiRefNet.mlpackage",
 }
 
+# ImageNet preprocessing constants — fixed by the BiRefNet checkpoints.
+_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
-# Provider preference order: CoreML first (CPU+GPU+ANE), then CPU.
-PROVIDERS_PREFERRED: list[str] = [
-    "CoreMLExecutionProvider",
-    "CPUExecutionProvider",
-]
+# Fixed input resolution baked into the mlpackage during conversion.
+INPUT_HW = 1024
 
 
-def _force_cpu_requested() -> bool:
-    """Return True if `ONNX_FORCE_CPU=1` is set in the environment.
+class BiRefNetCoreMLSession:
+    """Thin runtime wrapper around a CoreML `MLModel`.
 
-    Escape hatch added in S53 follow-up: on macOS 26.5 + onnxruntime 1.26
-    + M-series, the CPU EP is the empirically-fastest steady-state path
-    for swin-transformer BiRefNet (~6.7s/image lite, ~10s general/dis).
-    CoreML EP with `CPUAndGPU` is ~35× slower (Metal command-buffer
-    thrashing); `MLComputeUnits=ALL` requires a 15-25 min ANE compile.
-    Setting `ONNX_FORCE_CPU=1` bypasses the CoreML preference entirely
-    and pins the session to `CPUExecutionProvider`. See
-    `memory/perf_segmentation_s52.md` for measurements.
+    Exposes `predict(rgb_uint8)` which:
+      1. Resizes to `INPUT_HW × INPUT_HW` via bilinear (PIL).
+      2. Normalizes with ImageNet stats, produces `[1, 3, 1024, 1024]` float32.
+      3. Calls `MLModel.predict` (CPU + Metal GPU).
+      4. Returns the sigmoid mask resized back to the source `(H, W)`.
+
+    The caller does anything else (alpha compositing, PNG/EXR serialization).
     """
-    val = os.environ.get("ONNX_FORCE_CPU", "").strip().lower()
-    return val in {"1", "true", "yes", "on"}
+
+    def __init__(self, variant: str, mlmodel: Any, package_path: Path):
+        self.variant = variant
+        self.mlmodel = mlmodel
+        self.package_path = package_path
+
+    def predict(self, image_rgb: np.ndarray) -> np.ndarray:
+        """Run a single image through the model.
+
+        Args:
+            image_rgb: `[H, W, 3]` uint8 RGB.
+
+        Returns:
+            `[H, W]` float32 mask in `[0, 1]` at the *source* resolution.
+        """
+        if image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
+            raise ValueError(
+                f"expected HxWx3 RGB, got shape {image_rgb.shape}"
+            )
+        if image_rgb.dtype != np.uint8:
+            raise ValueError(f"expected uint8, got dtype {image_rgb.dtype}")
+
+        src_h, src_w = image_rgb.shape[:2]
+
+        # Resize source to the fixed model input. PIL bilinear here to keep
+        # this stdlib-light; we only need numpy + Pillow.
+        from PIL import Image
+
+        pil = Image.fromarray(image_rgb, mode="RGB")
+        if pil.size != (INPUT_HW, INPUT_HW):
+            pil_resized = pil.resize(
+                (INPUT_HW, INPUT_HW), Image.Resampling.BILINEAR
+            )
+        else:
+            pil_resized = pil
+
+        # HWC uint8 -> CHW float32, ImageNet-normalized.
+        arr = np.asarray(pil_resized, dtype=np.float32) / 255.0
+        arr = (arr - _MEAN) / _STD
+        arr = np.transpose(arr, (2, 0, 1))[None, ...]  # [1, 3, 1024, 1024]
+        arr = np.ascontiguousarray(arr, dtype=np.float32)
+
+        out = self.mlmodel.predict({"input": arr})
+        mask_chw = out["mask"]  # [1, 1, 1024, 1024] float32 in [0,1]
+        mask = np.asarray(mask_chw, dtype=np.float32).squeeze()  # [1024, 1024]
+        mask = np.clip(mask, 0.0, 1.0)
+
+        # Resize back to source resolution. Use PIL bilinear on a single-
+        # channel image to match the upscaling used by training-time
+        # rembg pipelines.
+        mask_pil = Image.fromarray((mask * 255.0).astype(np.uint8), mode="L")
+        if mask_pil.size != (src_w, src_h):
+            mask_pil = mask_pil.resize(
+                (src_w, src_h), Image.Resampling.BILINEAR
+            )
+        return np.asarray(mask_pil, dtype=np.float32) / 255.0
 
 
-def _resolve_session_name(model_name: str) -> str:
-    """Translate user-facing aliases to rembg's internal session names."""
-    return _ALIASES.get(model_name, model_name)
-
-
-def _available_providers() -> list[str]:
-    try:
-        import onnxruntime as ort
-        return list(ort.get_available_providers())
-    except Exception as exc:
-        log.warning(f"onnxruntime unavailable: {exc}")
-        return []
-
-
-def _filter_providers(preferred: list[str]) -> list[str]:
-    # `ONNX_FORCE_CPU=1` short-circuits to CPU-only regardless of preference.
-    if _force_cpu_requested():
-        log.info(
-            "[SegmentationBiRefNet] ONNX_FORCE_CPU=1 — pinning to "
-            "CPUExecutionProvider (skipping CoreML EP)."
+def _resolve_package_path(variant: str) -> Path:
+    """Return the absolute `.mlpackage` path for a variant, or raise."""
+    if variant not in VARIANT_PACKAGES:
+        raise ValueError(
+            f"unknown BiRefNet variant {variant!r}; "
+            f"expected one of {sorted(VARIANT_PACKAGES)}"
         )
-        return ["CPUExecutionProvider"]
-    available = set(_available_providers())
-    filtered = [p for p in preferred if p in available]
-    if not filtered:
-        filtered = ["CPUExecutionProvider"]
-    return filtered
+    home = ensure_models_dir()
+    path = (home / VARIANT_PACKAGES[variant]).resolve()
+    if not path.is_dir() or not (path / "Manifest.json").is_file():
+        raise FileNotFoundError(
+            f"BiRefNet CoreML package missing at {path}. "
+            f"Convert it with `python models/convert/convert_to_coreml.py "
+            f"{variant.replace('birefnet-', '')}` (see ai-models/README.md)."
+        )
+    return path
 
 
-def get_session(model_name: str = "birefnet-general"):
-    """Return a cached rembg session, creating it if needed.
+def get_session(variant: str = "birefnet-lite") -> BiRefNetCoreMLSession:
+    """Return a cached CoreML session, creating it if needed.
 
-    Honours `U2NET_HOME`. Tries CoreML EP first, falls back to CPU.
-    Raises only if even the CPU fallback fails (which usually means the
-    ONNX file is missing — run `scripts/download_models.py` first).
+    Loads the model with `MLComputeUnits.cpuAndGPU`. Issues one warm-up
+    predict on a synthetic input so the Metal pipelines are JIT-compiled
+    before the first real frame.
     """
-    session_name = _resolve_session_name(model_name)
-    if session_name in _SESSION_CACHE:
-        return _SESSION_CACHE[session_name]
+    if variant in _SESSION_CACHE:
+        return _SESSION_CACHE[variant]
 
-    ensure_u2net_home()
-    home = os.environ["U2NET_HOME"]
-    log.info(f"[SegmentationBiRefNet] U2NET_HOME={home}")
-
-    # Import lazily — rembg pulls in scikit-image / numba which add ~2s
-    # to startup if loaded eagerly at module import time.
-    from rembg import new_session
-
-    providers = _filter_providers(PROVIDERS_PREFERRED)
+    pkg = _resolve_package_path(variant)
     log.info(
-        f"[SegmentationBiRefNet] Loading model '{session_name}' "
-        f"with providers={providers}"
+        f"[SegmentationBiRefNet] Loading {pkg.name} (cpuAndGPU)"
     )
 
-    try:
-        sess = new_session(session_name, providers=providers)
-        if "CoreMLExecutionProvider" in providers:
-            log.info("[SegmentationBiRefNet] CoreML EP active "
-                     "(CPU + GPU + ANE dispatch)")
-        else:
-            log.warning("[SegmentationBiRefNet] CoreML EP unavailable — "
-                        "running CPU-only.")
-    except Exception as exc:
-        log.warning(
-            f"[SegmentationBiRefNet] CoreML session load failed ({exc}); "
-            "retrying with default (CPU) provider list."
-        )
-        sess = new_session(session_name)
+    # Import lazily so this module is cheap to import in tests that don't
+    # actually load a model.
+    import coremltools as ct
 
-    _SESSION_CACHE[session_name] = sess
+    mlmodel = ct.models.MLModel(
+        str(pkg),
+        compute_units=ct.ComputeUnit.CPU_AND_GPU,
+    )
+
+    # Warm-up. The first predict is much slower than steady state because
+    # CoreML JIT-compiles the Metal pipelines lazily.
+    warmup = np.zeros((1, 3, INPUT_HW, INPUT_HW), dtype=np.float32)
+    try:
+        mlmodel.predict({"input": warmup})
+    except Exception as exc:  # noqa: BLE001 — keep going; first predict can fail on garbage input
+        log.warning(f"[SegmentationBiRefNet] warmup predict failed (ignored): {exc}")
+
+    sess = BiRefNetCoreMLSession(variant, mlmodel, pkg)
+    _SESSION_CACHE[variant] = sess
+    log.info(f"[SegmentationBiRefNet] Session ready for variant={variant}")
     return sess
 
 
@@ -142,114 +188,10 @@ def clear_session_cache() -> None:
     _SESSION_CACHE.clear()
 
 
-# ---------------------------------------------------------------------------
-# Profiling-only helper: bypass rembg's BaseSession.__init__ so we can pass
-# `provider_options` (e.g. `MLComputeUnits=CPUAndGPU`) to the CoreML EP.
-#
-# rembg's `BaseSession.__init__` only forwards `providers=...` to
-# `ort.InferenceSession(...)`. To pin the CoreML EP to CPU+GPU (skipping the
-# 15-25 min `ANECompilerService` step) we must construct the InferenceSession
-# ourselves and graft it onto a duck-typed rembg session shell.
-#
-# This is NOT used in the production node path — it exists for
-# `scripts/profile_segmentation_light.py` only.
-# ---------------------------------------------------------------------------
-
-_REMBG_SESSION_CLASSES: dict[str, str] = {
-    # variant alias -> (module, class_name)
-    "birefnet-general": "rembg.sessions.birefnet_general:BiRefNetSessionGeneral",
-    "birefnet-general-lite": "rembg.sessions.birefnet_general_lite:BiRefNetSessionGeneralLite",
-    "birefnet-lite": "rembg.sessions.birefnet_general_lite:BiRefNetSessionGeneralLite",
-    "birefnet-dis": "rembg.sessions.birefnet_dis:BiRefNetSessionDIS",
-}
-
-
-def _onnx_path_for_variant(model_name: str) -> str:
-    """Return the on-disk ONNX path for a variant, using U2NET_HOME."""
-    rembg_name = _resolve_session_name(model_name)
-    home = os.environ.get("U2NET_HOME") or str(ensure_u2net_home())
-    return os.path.join(home, f"{rembg_name}.onnx")
-
-
-def get_session_with_compute_units(
-    model_name: str = "birefnet-general",
-    compute_units: str = "CPUAndGPU",
-    use_cache: bool = False,
-):
-    """Build a rembg-compatible session with an explicit CoreML EP MLComputeUnits.
-
-    `compute_units` is forwarded to the CoreML EP via `provider_options` and
-    must be one of: `CPUOnly`, `CPUAndGPU`, `CPUAndNeuralEngine`, `ALL`.
-    Using `CPUAndGPU` is the documented way to keep inference on Metal GPU
-    while bypassing the ANE compile step.
-
-    The returned object exposes `.predict(img)` like a rembg session, so it
-    can be passed to `rembg.remove(img, session=...)`. By default the
-    profile cache is bypassed — pass `use_cache=True` to share across calls.
-    """
-    import importlib
-
-    import onnxruntime as ort
-
-    ensure_u2net_home()
-    rembg_name = _resolve_session_name(model_name)
-
-    cache_key = f"{rembg_name}::{compute_units}"
-    if use_cache and cache_key in _SESSION_CACHE:
-        return _SESSION_CACHE[cache_key]
-
-    spec = _REMBG_SESSION_CLASSES.get(model_name) or _REMBG_SESSION_CLASSES.get(rembg_name)
-    if spec is None:
-        raise ValueError(
-            f"Unknown BiRefNet variant {model_name!r}; "
-            f"expected one of {sorted(_REMBG_SESSION_CLASSES)}"
-        )
-    module_name, class_name = spec.split(":")
-    mod = importlib.import_module(module_name)
-    SessCls = getattr(mod, class_name)
-
-    onnx_path = _onnx_path_for_variant(model_name)
-    if not os.path.isfile(onnx_path):
-        raise FileNotFoundError(
-            f"ONNX not found at {onnx_path}; run scripts/download_models.py"
-        )
-
-    available = set(_available_providers())
-    providers: list[str] = []
-    provider_options: list[dict] = []
-    if "CoreMLExecutionProvider" in available:
-        providers.append("CoreMLExecutionProvider")
-        provider_options.append({"MLComputeUnits": compute_units})
-    providers.append("CPUExecutionProvider")
-    provider_options.append({})
-
-    log.info(
-        f"[SegmentationBiRefNet] (profile) Loading '{rembg_name}' with "
-        f"providers={providers} provider_options={provider_options}"
-    )
-
-    sess_opts = ort.SessionOptions()
-    inner = ort.InferenceSession(
-        onnx_path,
-        sess_options=sess_opts,
-        providers=providers,
-        provider_options=provider_options,
-    )
-
-    # Build a rembg-shaped wrapper. We bypass BaseSession.__init__ on purpose
-    # so it does not try to re-create the inner_session.
-    wrapper = SessCls.__new__(SessCls)
-    wrapper.model_name = rembg_name
-    wrapper.inner_session = inner
-
-    if use_cache:
-        _SESSION_CACHE[cache_key] = wrapper
-    return wrapper
-
-
 __all__ = [
+    "BiRefNetCoreMLSession",
+    "VARIANT_PACKAGES",
+    "INPUT_HW",
     "get_session",
-    "get_session_with_compute_units",
     "clear_session_cache",
-    "PROVIDERS_PREFERRED",
 ]

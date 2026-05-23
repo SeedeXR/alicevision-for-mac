@@ -7,7 +7,6 @@ Native Apple Silicon Metal port of [AliceVision](https://alicevision.org/)
 **Status** (plain text — CI wiring deferred):
 
 - `ctest -j8`: **37/37** pass reliably
-- `swift test`: **170/170** pass (native SwiftUI; +14 SegmentationBiRefNet, +5 PluginRegistry)
 - `pytest tests/python`: **11 passed, 1 skipped** (segmentation helpers + plugin manifest + ONNX_FORCE_CPU; E2E gated on `RUN_SEG_E2E=1`)
 - `release`: `build/release/alicevision-for-mac-0.1.0-arm64.tar.gz` (15 MB) + `-dSYM.tar.gz` (161 MB)
 - `version`: 0.1.0
@@ -28,18 +27,18 @@ Native Apple Silicon Metal port of [AliceVision](https://alicevision.org/)
   `texturing`, plus `importMiddlebury`.
 - **`default.metallib`** — all GPU kernels compiled to a single Metal
   shader archive (~41 MSL kernels), staged next to each binary.
-- **Native SwiftUI Meshroom** at `meshroom-native/` — alternative to
-  Python/Qt Meshroom: graph viewer, drag-to-move nodes, parameter
-  editing, drag-to-connect pins, type-checked connections, node-creation
-  palette, scheduler with chunked DepthMap execution + per-chunk
-  progress, Meshroom-compatible UID hashing for project interop.
 - **Python Meshroom integration** at `meshroom-mac/` + `scripts/run_meshroom.sh`
   — runs upstream's PySide6 Meshroom against the Apple Silicon binaries
   (verified end-to-end on the Monstree dataset; produces textured 3D mesh).
+  This is the **sole** Meshroom frontend we ship: the prior native SwiftUI
+  prototype was decommissioned in May 2026 to consolidate effort on the
+  upstream-compatible Python Meshroom.
 - **Release tarballs** at `build/release/` — small binary + separate
   debug-symbol bundle (canonical Apple split).
 - **AI-powered foreground segmentation** (`SegmentationBiRefNet` node,
-  CoreML + ANE) — see [docs/user/segmentation.md](docs/user/segmentation.md).
+  CoreML on CPU+GPU) — BiRefNet `lite` and `general` `.mlpackage` models live in
+  [`ai-models/`](ai-models/). See [docs/user/segmentation.md](docs/user/segmentation.md)
+  and [ai-models/README.md](ai-models/README.md).
 - **Native plugin system** at `plugins/` — third parties can ship AI
   extensions via a self-contained `plugin.json` manifest. AI segmentation
   is the first plugin; contract documented at
@@ -78,12 +77,6 @@ End-to-end smoke test on the Monstree mini dataset (3 photos):
 bash scripts/run_meshroom.sh mini3   # → meshroom-mac-out/result/texturedMesh.obj
 ```
 
-Native SwiftUI app:
-
-```bash
-cd meshroom-native && swift run MeshroomNativeApp
-```
-
 ---
 
 ## Repository layout
@@ -91,11 +84,13 @@ cd meshroom-native && swift run MeshroomNativeApp
 ```
 src/                  Overlay code (MIT): av::gpu, depth_map_metal, MSL shaders
 tests/                C++ ctest suite (37 tests)
-meshroom-native/      Native SwiftUI app (170 tests)
+ai-models/            Pre-built CoreML segmentation models (BiRefNet lite + general)
 docs/                 MkDocs Material doc source
 cmake/                Build helpers (Metal.cmake, UpstreamShim.cmake, shims/)
 patches/              Patches against upstream Meshroom (not modifying upstream/)
+plugins/              AI plugin manifests (e.g. ai-segmentation)
 scripts/              run_meshroom.sh + diagnostic helpers
+models/               BiRefNet HF checkpoints + CoreML conversion scripts
 third_party/          Vendored deps: LEMON (tracked), metal-cpp (downloaded)
 Formula/              Homebrew formula
 
@@ -129,7 +124,7 @@ Full layout in [`docs/dev/codebase-navigation.md`](docs/dev/codebase-navigation.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
 - Open an issue before any non-trivial PR.
-- Tests must pass: `ctest -j8: 37/37` + `swift test: 170/170` + `pytest tests/python: 11 passed, 1 skipped`.
+- Tests must pass: `ctest -j8: 37/37` + `pytest tests/python: 11 passed, 1 skipped`.
 - For perf changes: include before/after numbers via `AV_PROFILE_ADAPTER=ON`.
 - For numerical-kernel changes: validate against a CPU-FP64 reference.
 - Don't modify `upstream/` (it's a read-only symlink).
@@ -159,8 +154,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
 ## License
 
 [MIT](LICENSE) for the overlay code authored in this repository
-(`src/`, `tests/`, `meshroom-native/`, `cmake/`, `docs/`, `patches/`,
-`scripts/`).
+(`src/`, `tests/`, `cmake/`, `docs/`, `patches/`, `scripts/`,
+`plugins/`, `models/`).
 
 Third-party components retain their upstream licenses:
 - **AliceVision** — Mozilla Public License 2.0

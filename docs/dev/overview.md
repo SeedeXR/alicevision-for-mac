@@ -15,7 +15,7 @@ flowchart LR
     subgraph overlay["alicevision-for-mac/"]
         SR[src/<br/>av_gpu + depth_map_metal + shaders]
         SH[cmake/<br/>UpstreamShim + Metal + shims/]
-        ME[meshroom-native/<br/>SwiftUI app]
+        AI[ai-models/ + plugins/<br/>BiRefNet CoreML segmentation]
         MP[patches/<br/>Meshroom + node-descriptor patches]
         FM[Formula/<br/>alicevision-for-mac.rb]
     end
@@ -52,8 +52,10 @@ alicevision-for-mac/
 │   ├── shaders/depth_map/      MSL kernels (35 entry points across 15 files)
 │   ├── cli/                    (reserved for unified `aliceVision` CLI)
 │   └── python_shim/            tiny pyalicevision stub
-├── tests/                      37 ctest executables
-├── meshroom-native/            SwiftUI app (115 tests)
+├── tests/                      37 ctest executables (+ tests/python/ pytest suite)
+├── ai-models/                  pre-built BiRefNet CoreML mlpackages
+├── models/                     BiRefNet HF checkpoints + conversion scripts
+├── plugins/ai-segmentation/    Meshroom node + Python helpers (BiRefNet)
 ├── meshroom-mac/               working copy of Meshroom with macOS patches applied
 ├── meshroom-venv/              Python venv for Meshroom runtime
 ├── patches/meshroom/           4 patches against upstream Meshroom
@@ -150,7 +152,7 @@ lines and translates upstream `CudaDeviceMemoryPitched<T, N>` /
 | Upstream modules compiled | **32** | S41 |
 | `cuda_*` adapter forwarders | **15** | `src/depth_map_metal/src/upstream_adapter.cpp` |
 | C++ tests (ctest) | **37/37 pass** | `ctest --test-dir build` |
-| Swift tests | **115 pass** | `cd meshroom-native && swift test` |
+| Python tests | **11 passed / 1 skipped** | `python -m pytest tests/python` |
 | Meshroom patches | 4 + 2 | `patches/meshroom/`, `patches/alicevision-meshroom/` |
 | Upstream LOC we replaced | ~6000 CUDA C++/.cu → ~2000 MSL + adapter + shims | `memory/mental_note.md` §11 |
 

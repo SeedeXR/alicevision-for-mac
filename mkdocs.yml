@@ -73,7 +73,6 @@ nav:
   - User Guide:
     - user/install.md
     - user/pipeline.md
-    - user/native-ui.md
     - user/meshroom.md
     - user/segmentation.md
     - user/troubleshooting.md

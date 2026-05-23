@@ -5,7 +5,7 @@ The repository has three independent test suites:
 | Suite | Driver | Where | Count |
 |---|---|---|---|
 | C++ kernel + adapter | `ctest` (CMake) | `tests/` | **37/37 pass** |
-| Swift native UI | `swift test` | `meshroom-native/Tests/` | **115 pass** |
+| Python (Meshroom + segmentation) | `pytest` | `tests/python/` + `plugins/*/tests/` | **11 passed, 1 skipped** |
 | Meshroom integration | manual smoke | `scripts/run_meshroom.sh` | Monstree mini3 end-to-end |
 
 ## C++ tests — `ctest`
@@ -63,28 +63,28 @@ After every kernel change:
 After any adapter change, **rerun the S41 audit** mentally — line up the
 forwarder's parameter pre-processing against `dSV.cu` / `dDSM.cu`.
 
-## Swift tests — `swift test`
+## Python tests — `pytest`
 
 ```bash
-cd meshroom-native
-swift test                             # 115 tests expected to pass
+source meshroom-venv/bin/activate
+python -m pytest tests/python                     # 11 passed, 1 skipped
+python -m pytest plugins/ai-segmentation/tests    # manifest + segmentation helpers
 ```
 
-The suite is split into two targets:
+`tests/python/` contains:
 
-- **`ProjectModelTests`** — `.mg` round-trip and template-reference parser.
-  Three fixtures in `Tests/ProjectModelTests/Fixtures/`:
-  `appendTextAndFiles.mg` (real upstream fixture, 3 nodes, template form),
-  `sharedTemplate.mg` (real upstream fixture, empty template),
-  `photogrammetryMini.mg` (synthetic, exercises uid/outputs/parallel/groups).
-- **`AppTests`** — covers `ProjectViewModel`, `GraphScheduler`,
-  `GraphExecutor`, `GraphLayout`, `NodeUIDHasher`, `ConnectionEditing`,
-  and the M5 chunked-execution path. Fixtures in
-  `Tests/AppTests/Fixtures/`.
+- `test_meshroom_mac_ui.py` — 13 tests guarding the meshroom-mac Qt UI fixes
+  (semaphore leak, QML/RHI issues). 5 are gated behind `RUN_MESHROOM_UI=1`.
+- `test_pipeline_integration.py` — 31 tests; 6 always-on coverage assertions
+  (template ↔ binary matrix), 2 E2E `photogrammetryDraft` / `photogrammetryLegacy`
+  runs on Monstree mini3 gated behind `RUN_PIPELINE_E2E=1`, 23 uncovered-pipeline
+  diagnostic tests.
 
-The Swift suite has **no external dependencies** — `swift test` builds
-against the toolchain shipped with the active Xcode (Swift 5.9+ required for
-the `platforms:` syntax in `Package.swift`).
+`plugins/ai-segmentation/tests/` contains:
+
+- `test_plugin_manifest.py` — `plugin.json` parses, all referenced paths exist.
+- `test_segmentation.py` — `segmentation.session` helpers, provider filtering
+  under `ONNX_FORCE_CPU=1`. Full E2E gated behind `RUN_SEG_E2E=1`.
 
 ## Meshroom integration
 
@@ -115,5 +115,5 @@ matching test in `tests/`" is enforced socially via the
 ## CI
 
 There is no CI today. Phase 12 includes setting up a GitHub Actions
-workflow that runs ctest + swift test on a macos-14 (Apple Silicon)
+workflow that runs `ctest` + `pytest` on a macos-14 (Apple Silicon)
 runner. Tracking in `memory/todo.md`.

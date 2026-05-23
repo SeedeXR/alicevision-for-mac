@@ -1,9 +1,9 @@
 {
   "name": "ai-segmentation",
-  "version": "1.0.0",
-  "description": "AI-powered foreground segmentation via BiRefNet + CoreML",
+  "version": "2.0.0",
+  "description": "AI-powered foreground segmentation via BiRefNet on CoreML (CPU + Metal GPU)",
   "license": "MIT",
-  "compute_backends": ["coreml", "metal", "ane", "cpu"],
+  "compute_backends": ["coreml", "metal", "cpu"],
   "models_dir": "../../ai-models",
   "python": {
     "venv": "../../meshroom-venv",
@@ -11,7 +11,6 @@
     "package_path": "python",
     "entry_module": "meshroom.bin.node_run"
   },
-  "wrapper_script": "../../meshroom-native/scripts/run_python_node.sh",
   "nodes": [
     {
       "name": "SegmentationBiRefNet",
@@ -20,8 +19,6 @@
       "inputs": {
         "input": "file",
         "modelVariant": "string",
-        "outputResolution": "string",
-        "alphaMatting": "bool",
         "maskFormat": "string",
         "keepFilename": "bool",
         "verboseLevel": "string"
@@ -34,8 +31,7 @@
     }
   ],
   "model_variants": [
-    {"id": "birefnet-general", "size_mb": 927, "backbone": "swin_v1_large"},
-    {"id": "birefnet-dis", "size_mb": 929, "backbone": "swin_v1_large_dis"},
-    {"id": "birefnet-lite", "size_mb": 213, "backbone": "swin_v1_tiny"}
+    {"id": "birefnet-lite", "size_mb": 90, "backbone": "swin_v1_t", "package": "BiRefNet_lite.mlpackage"},
+    {"id": "birefnet-general", "size_mb": 447, "backbone": "swin_v1_l", "package": "BiRefNet.mlpackage"}
   ]
 }

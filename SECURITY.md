@@ -33,8 +33,9 @@ In scope:
 - Memory-safety bugs in our C++ overlay code (`src/av_gpu/`,
   `src/depth_map_metal/`, kernel host code in `tests/` and
   `src/shaders/`).
-- Sandbox-escape via SwiftUI native app input parsing
-  (`meshroom-native/Sources/`).
+- Input-parsing flaws in the Meshroom integration layer
+  (`meshroom-mac/`, `plugins/`, `patches/`) that lead to
+  arbitrary code execution.
 - Build-time RCE via maliciously crafted CMake/patch files.
 - Pipeline-binary input handling: validate-first behaviour on
   malformed SfMData JSON, EXR depth maps, etc.

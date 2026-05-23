@@ -124,26 +124,42 @@ Phases below are coarse-grained groupings of related sessions.
   `{16, 4, 1}` to `{4, 2, 8}` (Z-coherent texture cache hits).
   **-65.0 %** (3.26 s → 1.14 s). Adapter total 12.4 s.
 
-## Phase 15 — Native SwiftUI app (M1–M6)
+## Phase 15 — Native SwiftUI app (decommissioned 2026-05-23)
 
-- M1: `ProjectModel` — `.mg` round-trip + template-reference parser.
-  Foundation-only.
-- M2: App scaffold; `MeshroomNativeApp` SwiftUI executable; open `.mg`.
-- M3: Schema-driven parameter forms (Stepper / Slider / Toggle / Picker
-  / List / GroupAttribute).
-- M4: Inspector pane; parameter editing with `UndoManager`.
-- M5: `GraphExecutor` — topo-sort, `Process`-per-node, AsyncStream
-  events. Cmd-R to run; Cmd-period to stop.
-- M6: Graph canvas with drag-to-connect edges. 115 Swift tests pass.
+An earlier track shipped a parallel native SwiftUI Meshroom frontend at
+`meshroom-native/` (M1–M6 milestones, 115 Swift tests). It was retired on
+2026-05-23 to consolidate work on the upstream-compatible PySide6
+Meshroom: maintaining two graph editors against an evolving upstream node
+schema doubled review surface for marginal user benefit. The Swift code,
+tests, scripts, and per-page documentation have been removed.
 
-## Current state (S47, 2026-05-20)
+## S52–S54 — AI segmentation & macOS Qt UI fixes
+
+- S52: `SegmentationBiRefNet` Meshroom node landed (rembg + ONNX Runtime
+  CoreML EP, with `ONNX_FORCE_CPU=1` escape hatch for the broken
+  `CPUAndGPU` path on `swin_v1`).
+- S53: native plugin system at `plugins/` — `plugin.json` manifests
+  consumed via `MESHROOM_NODES_PATH`.
+- S54: macOS Qt UI fixes for meshroom-mac (semaphore leak via
+  `ThreadPoolExecutor`, RHI backend pinned to Metal, Qt3D deferred behind
+  `MESHROOM_ENABLE_VIEWER3D=1`, `PrepareDenseScene.size` uses
+  `DynamicViewsSize`).
+- 2026-05-23: pre-converted BiRefNet `.mlpackage` models added at
+  `ai-models/`; conversion pipeline at `models/`. ANE found to be not
+  viable for this graph (deformable conv v2 lowered via `grid_sample`
+  cannot be planned by the ANE compiler); `MLComputeUnits.cpuAndGPU` is
+  the production target on Apple Silicon.
+
+## Current state (2026-05-23)
 
 - 12 pipeline binaries, ARM64 native, codesigned.
 - 32 upstream modules compiled.
 - 41 MSL kernel entry points.
 - 15 `cuda_*` adapter forwarders, audited.
 - 37/37 C++ tests pass under `ctest -j8`.
-- 115/115 Swift tests pass under `swift test`.
+- 11 passed / 1 skipped in `python -m pytest tests/python`.
+- 2 BiRefNet CoreML models shipped at `ai-models/` (90 MB `lite` + 447 MB
+  `general`); on M-series GPU ~350 / ~980 ms per 1024² frame.
 - End-to-end Monstree mini3 → textured 3D mesh in ~1 min on M4.
 - Release tarball + Homebrew formula in place (formula needs published
   GitHub release URL).
