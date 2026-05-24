@@ -56,16 +56,20 @@ to match the CMake-level guards.
 The short version:
 
 ```bash
-git clone <this-repo> alicevision-for-mac
+git clone https://github.com/SeedeXR/alicevision-for-mac
 cd alicevision-for-mac
-brew install cmake ninja eigen \
+brew install cmake ninja swig eigen opencv \
     alembic assimp boost ceres-solver geogram imath lemon \
     libomp nanoflann onnxruntime open-mesh openexr openimageio pkgconf
+
+# Fetch the 4 CoreML models (~750 MB) into ai-models/
+bash scripts/download_ai_models.sh
 
 cmake -S . -B build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DAV_BUILD_UPSTREAM=ON \
-    -DAV_BUILD_UPSTREAM_DEPTHMAP=ON
+    -DAV_BUILD_UPSTREAM_DEPTHMAP=ON \
+    -DAV_BUILD_PYALICEVISION=ON
 
 cmake --build build
 ctest --test-dir build              # 37/37 expected
@@ -74,7 +78,57 @@ ctest --test-dir build              # 37/37 expected
 For the kernel-only minimal build (no upstream tree, no pipeline binaries)
 see the [Developer build guide](../dev/build.md).
 
-## 4. Install the release tarball
+## 4. Download AI models
+
+The Mac port ships four CoreML `.mlpackage` files (~750 MB total) that
+are NOT committed to git — `ai-models/` is gitignored. Native binaries
+(`aliceVision_sphereDetection`, `aliceVision_moGe`,
+`aliceVision_matchMasking`) and the `SegmentationBiRefNet` Meshroom
+node look for them at `<repo>/ai-models/<name>.mlpackage` at runtime.
+
+### Option A: pre-converted bundle (recommended)
+
+```bash
+bash scripts/download_ai_models.sh
+```
+
+Fetches a single Google Drive archive
+([link](https://drive.google.com/file/d/12jt788_0Wab_nahVa7zP2lHfDSAYky5z/view?usp=sharing))
+containing all four `.mlpackages` and extracts them into `ai-models/`.
+
+- Skips models already present; pass `--force` to re-download.
+- Auto-installs the `gdown` Python tool if missing.
+- Pass `--archive /path/to/file.tar.gz` if you've downloaded the
+  archive manually (browser → "Download" on the Drive URL above).
+- `bash scripts/download_ai_models.sh -h` prints the full flag set.
+
+### Option B: convert from upstream sources
+
+The conversion scripts + per-model recipes are in a companion repo:
+<https://github.com/SeedeXR/alicevision-for-mac-models>.
+
+Use this path when you want a different input shape, FP32 precision,
+a different backbone (BiRefNet `general` vs `lite`), or are tuning the
+conversion for a different distribution model. Not required for normal
+usage.
+
+The four models the binaries expect (any names other than these will
+not be auto-discovered):
+
+| Filename | Native binary / consumer | Size |
+|---|---|---|
+| `BiRefNet_lite.mlpackage` | `SegmentationBiRefNet` Meshroom node (default) | ~90 MB |
+| `BiRefNet.mlpackage` | `SegmentationBiRefNet` (high-accuracy variant) | ~447 MB |
+| `yolov8n.mlpackage` | `aliceVision_sphereDetection` | ~13 MB |
+| `moge2_504x672_t1728.mlpackage` | `aliceVision_moGe` | ~187 MB |
+| `tiny_roma_v1_480x640.mlpackage` | `aliceVision_matchMasking` | ~5.5 MB |
+
+See [ai-models/README.md](https://github.com/SeedeXR/alicevision-for-mac/blob/main/ai-models/README.md)
+for the full per-model integration recipe, ANE outcome matrix, and
+runtime discovery rules (`ALICEVISION_MOGE_MLPACKAGE`,
+`ALICEVISION_ROMA_MLPACKAGE`, `ALICEVISION_ROOT` env vars).
+
+## 5. Install the release tarball
 
 ```bash
 cmake --build build --target package
@@ -117,7 +171,7 @@ The Metal shader archive is loaded via `@executable_path/default.metallib` and
 **must remain alongside the binary**. The CMake install rule
 (`av_install_metallib`) stages it there.
 
-## 5. Verify
+## 6. Verify
 
 ```bash
 # Confirm the binary is arm64 + adhoc-signed:
@@ -130,7 +184,7 @@ codesign -dv /opt/alicevision-for-mac-0.1.0/bin/aliceVision_cameraInit
 
 Expected: `Mach-O 64-bit executable arm64` and `Signature=adhoc`.
 
-## 6. Sample run
+## 7. Sample run
 
 The fastest sample is `dataset_monstree/mini3/` (3 JPGs at 4032×3024). Drive
 it through the Meshroom wrapper to get a textured mesh in ~1 minute on an M4:
@@ -145,7 +199,7 @@ it through the Meshroom wrapper to get a textured mesh in ~1 minute on an M4:
 See [Running the pipeline](pipeline.md) for the per-binary breakdown and
 [Meshroom integration](meshroom.md) for the wrapper-script internals.
 
-## 7. Known limitations
+## 8. Known limitations
 
 | Limitation | Tracking |
 | --- | --- |

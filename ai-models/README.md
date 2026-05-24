@@ -2,12 +2,51 @@
 
 This directory holds the pre-converted CoreML `.mlpackage` files that the
 Mac port's native ML binaries and segmentation plugin load at runtime.
-The packages were produced from upstream PyTorch / ONNX checkpoints by
-the conversion pipelines documented in [`../models/`](../models/).
 
 The entire AliceVision-for-Mac stack is **CoreML-only** as of 2026-05-23.
 The rembg / ONNX Runtime backend was removed; ONNX Runtime is not a
 runtime dep of any binary in this build.
+
+---
+
+## How to get the models
+
+The `.mlpackage` files (~750 MB total) are NOT committed to git — the
+`ai-models/` directory is gitignored. You have two options:
+
+### Option A: Download the pre-converted bundle (recommended)
+
+```bash
+bash scripts/download_ai_models.sh
+```
+
+This fetches a single Google Drive archive containing all four
+`.mlpackage` directories and extracts them into `ai-models/`. Skip if
+they're already present; pass `--force` to re-download.
+
+- **Archive URL** (drag-and-drop into a browser if the script breaks):
+  <https://drive.google.com/file/d/12jt788_0Wab_nahVa7zP2lHfDSAYky5z/view?usp=sharing>
+- Download time: ~3-5 min on a fast connection.
+- **Requires `gdown`** (the maintained Python tool for Google Drive
+  large-file downloads). The script auto-installs it via `pip3 install
+  --user gdown` if missing.
+- **Manual fallback** if `gdown` fails: open the URL in a browser,
+  click *Download*, then re-run with
+  `scripts/download_ai_models.sh --archive /path/to/downloaded.tar.gz`.
+
+### Option B: Convert from scratch
+
+If you want to re-export with a different input shape, FP32 precision,
+a different backbone, etc., the **conversion scripts + per-model
+recipes** live in the companion repository:
+
+<https://github.com/SeedeXR/alicevision-for-mac-models>
+
+That repo documents how each of the four models was converted (the
+patches, the `coremltools` flags, the benchmark methodology) and
+provides reproducible scripts so you can regenerate the
+`.mlpackages` yourself from upstream PyTorch / ONNX sources. Not
+required for normal usage.
 
 ---
 
@@ -210,13 +249,21 @@ The two ObjC++ gotchas across all wrappers:
 
 ## Provenance
 
-| Model | Upstream | Conversion script | Conversion date |
-|---|---|---|---|
-| BiRefNet (×2) | [HuggingFace ZhengPeng7](https://huggingface.co/ZhengPeng7) | [`../models/convert_birefnet.py`](../models/convert_birefnet.py) | 2026-05-23 |
-| YOLOv8n | Ultralytics | (Ultralytics export with NMS) | 2026-05-24 |
-| MoGe-2 | [Microsoft MoGe](https://github.com/microsoft/MoGe) (torch==2.5.1) | (user-converted via coremltools 9.0, TorchScript dialect) | 2026-05-24 |
-| TinyRoMa | [Parskatt/RoMa](https://github.com/Parskatt/RoMa) + [verlab/accelerated_features](https://github.com/verlab/accelerated_features) (XFeat) | `convert/convert_roma.py` (4 static-shape patches; see ai-models/README "What had to be patched") | 2026-05-24 |
+All four `.mlpackages` are reproducible from upstream sources. The
+conversion scripts + recipes live in the companion repository:
+<https://github.com/SeedeXR/alicevision-for-mac-models>.
 
-Don't commit the `.mlpackage` directories to git unless they're small;
-the BiRefNet full and MoGe-2 are large enough to balloon the repo. Use
-Git LFS or a release attachment if you need to ship them with a tag.
+| Model | Upstream | Conversion notes | Conversion date |
+|---|---|---|---|
+| BiRefNet (×2) | [HuggingFace ZhengPeng7](https://huggingface.co/ZhengPeng7) | `cpuAndGPU` only — ANE compile hangs on the ViT graph | 2026-05-23 |
+| YOLOv8n | [Ultralytics](https://github.com/ultralytics/ultralytics) | Vision-style export with NMS baked in; runs on ANE | 2026-05-24 |
+| MoGe-2 | [Microsoft MoGe](https://github.com/microsoft/MoGe) (torch==2.5.1) | coremltools 9.0, TorchScript dialect, fixed 504×672 input | 2026-05-24 |
+| TinyRoMa | [Parskatt/RoMa](https://github.com/Parskatt/RoMa) + [verlab/accelerated_features](https://github.com/verlab/accelerated_features) (XFeat) | 4 static-shape patches in conversion script; `cpuAndGPU` only (ANE is 4× slower) | 2026-05-24 |
+
+The companion repo documents the exact `coremltools` flags, the
+required source patches, and the benchmark methodology for each model.
+
+**Do not commit `.mlpackage` directories to this repo.** The
+`ai-models/` directory is gitignored. Users should fetch them via
+`scripts/download_ai_models.sh` (pre-converted bundle on Google Drive)
+or regenerate them via the companion repo.

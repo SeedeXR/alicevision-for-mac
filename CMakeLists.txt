@@ -705,9 +705,19 @@ if(AV_BUILD_UPSTREAM_DEPTHMAP)
     # just this one header so the helpers are unconditionally
     # available; the cv:: types come from the explicit OpenCV_LIBS
     # link on the colorChecker binaries.
+    #
+    # The patched copy lives in a DEDICATED `upstream-patched-opencv/`
+    # subtree (NOT the generic `upstream-patched/`) because the patched
+    # variant unconditionally #includes <opencv2/core.hpp> — putting it
+    # in the generic shared path makes any other binary that
+    # transitively pulls in `image/all.hpp` fail to compile because
+    # they don't have OpenCV on their include flags. Only the
+    # colorChecker binary blocks add this narrow path; everyone else
+    # gets the upstream original (with the guard) where the helpers
+    # are correctly hidden when ALICEVISION_HAVE_OPENCV is off.
     set(_CVCONV_SRC     "${CMAKE_SOURCE_DIR}/upstream/src/aliceVision/image/conversionOpenCV.hpp")
-    set(_CVCONV_PATCHED "${CMAKE_BINARY_DIR}/upstream-patched/aliceVision/image/conversionOpenCV.hpp")
-    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/upstream-patched/aliceVision/image")
+    set(_CVCONV_PATCHED "${CMAKE_BINARY_DIR}/upstream-patched-opencv/aliceVision/image/conversionOpenCV.hpp")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/upstream-patched-opencv/aliceVision/image")
     file(READ "${_CVCONV_SRC}" _cvconv_content)
     string(REPLACE
         "#if ALICEVISION_IS_DEFINED(ALICEVISION_HAVE_OPENCV)"
@@ -1609,9 +1619,10 @@ if(AV_BUILD_UPSTREAM_DEPTHMAP)
     add_executable(aliceVision_colorCheckerCorrection
         upstream/src/software/utils/main_colorCheckerCorrection.cpp)
     target_include_directories(aliceVision_colorCheckerCorrection BEFORE PRIVATE
-        ${CMAKE_BINARY_DIR}/upstream-patched)
+        ${CMAKE_BINARY_DIR}/upstream-patched-opencv)
     target_include_directories(aliceVision_colorCheckerCorrection PRIVATE
         ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
         ${CMAKE_BINARY_DIR}/upstream-generated
         ${CMAKE_SOURCE_DIR}/upstream/src
         ${OpenCV_INCLUDE_DIRS})
@@ -1628,9 +1639,10 @@ if(AV_BUILD_UPSTREAM_DEPTHMAP)
     add_executable(aliceVision_colorCheckerDetection
         upstream/src/software/utils/main_colorCheckerDetection.cpp)
     target_include_directories(aliceVision_colorCheckerDetection BEFORE PRIVATE
-        ${CMAKE_BINARY_DIR}/upstream-patched)
+        ${CMAKE_BINARY_DIR}/upstream-patched-opencv)
     target_include_directories(aliceVision_colorCheckerDetection PRIVATE
         ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
         ${CMAKE_BINARY_DIR}/upstream-generated
         ${CMAKE_SOURCE_DIR}/upstream/src
         ${OpenCV_INCLUDE_DIRS})

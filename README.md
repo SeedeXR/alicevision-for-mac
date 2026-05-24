@@ -83,7 +83,10 @@ brew install alembic assimp boost ceres-solver eigen geogram imath \
 git clone https://github.com/alicevision/AliceVision.git ../alicevision-windows/AliceVision
 ln -s ../alicevision-windows/AliceVision upstream
 
-# 3. Build
+# 3. Download the 4 CoreML models (~750 MB into ai-models/)
+bash scripts/download_ai_models.sh
+
+# 4. Build
 cmake -S . -B build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DAV_BUILD_UPSTREAM=ON \
@@ -91,6 +94,13 @@ cmake -S . -B build -G Ninja \
     -DAV_BUILD_PYALICEVISION=ON
 cmake --build build
 ```
+
+The download step fetches a pre-converted bundle from a Google Drive
+archive (auto-installs `gdown` if missing). If you want to regenerate
+the `.mlpackages` from upstream sources (different input shape, FP32
+precision, etc.) the conversion scripts live in the companion repo:
+<https://github.com/SeedeXR/alicevision-for-mac-models>. See
+[`ai-models/README.md`](ai-models/README.md) for both paths.
 
 End-to-end smoke test on the Monstree mini dataset (3 photos):
 
