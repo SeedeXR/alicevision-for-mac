@@ -4,50 +4,66 @@ Native Apple Silicon Metal port of [AliceVision](https://alicevision.org/)
 (C++ photogrammetry library) and [Meshroom](https://github.com/alicevision/Meshroom)
 (node-graph reconstruction frontend).
 
-**Status** (plain text — CI wiring deferred):
+**Status (2026-05-24)** — feature-complete against upstream 2026.1.0:
 
-- `ctest -j8`: **37/37** pass reliably
-- `pytest tests/python`: **11 passed, 1 skipped** (segmentation helpers + plugin manifest + ONNX_FORCE_CPU; E2E gated on `RUN_SEG_E2E=1`)
-- `release`: `build/release/alicevision-for-mac-0.1.0-arm64.tar.gz` (15 MB) + `-dSYM.tar.gz` (161 MB)
-- `version`: 0.1.0
+- **60 native ARM64 `aliceVision_*` binaries** (was 12; expanded across Phases 14.1–14.9)
+- **25 of 25 Meshroom templates covered** — every binary present, every descriptor resolved, zero "honest stubs"
+- **4 CoreML models** integrated: BiRefNet (segmentation), YOLOv8n (sphere detection), MoGe-2 (depth), TinyRoMa (dense matching)
+- **3 native C++ wrapper modules** at `src/sphere_detection/`, `src/moge/`, `src/roma/` (Objective-C++ + pure-C++ public headers)
+- **Native pyalicevision SWIG bindings** (hdr, sfmData, sfmDataIO) — real C++ `estimateGroups()` etc. replace Python stubs
+- `pytest tests/python`: **73 passing, 25 skipped** (gated heavy E2E)
+- `ctest -j8`: **37/37** pass on a clean build
+- 4 templates verified end-to-end on `dataset_monstree/mini3`: Draft / Legacy / Object / Turntable
 - `target`: macOS 14+ on Apple Silicon (arm64)
 - `license`: [MIT](LICENSE) (overlay code; third-party retain their licenses)
-- `docs`: `mkdocs serve` → http://127.0.0.1:8000, or browse `docs/` directly
+- `docs`: <https://seedexr.github.io/alicevision-for-mac/> · or `mkdocs serve` locally
 - `agents`: see [llms.txt](llms.txt) for an AI-readable project digest
 
 ---
 
 ## What's in the box
 
-- **12 pipeline CLI binaries** covering the full photogrammetry workflow,
-  raw photos → textured 3D mesh:
-  `aliceVision_cameraInit` → `featureExtraction` → `imageMatching` →
-  `featureMatching` → `incrementalSfM` → `prepareDenseScene` →
-  `depthMapEstimation` → `depthMapFiltering` → `meshing` → `meshFiltering` →
-  `texturing`, plus `importMiddlebury`.
+- **60 native arm64 binaries** covering the full upstream 2026.1.0 Meshroom
+  template set. Groups: photogrammetry core (11), modern SfM (6), HDR (3),
+  panorama (8), photometric stereo (3), camera tracking + utilities (22),
+  LIDAR (3), Mac-port-native (3 — `starListing`, `matchMasking`, `moGe`),
+  Middlebury import (1). Full inventory:
+  [docs/reference/binaries.md](docs/reference/binaries.md).
 - **`default.metallib`** — all GPU kernels compiled to a single Metal
   shader archive (~41 MSL kernels), staged next to each binary.
-- **Python Meshroom integration** at `meshroom-mac/` + `scripts/run_meshroom.sh`
-  — runs upstream's PySide6 Meshroom against the Apple Silicon binaries
-  (verified end-to-end on the Monstree dataset; produces textured 3D mesh).
-  This is the **sole** Meshroom frontend we ship: the prior native SwiftUI
-  prototype was decommissioned in May 2026 to consolidate effort on the
-  upstream-compatible Python Meshroom.
-- **Release tarballs** at `build/release/` — small binary + separate
-  debug-symbol bundle (canonical Apple split).
-- **AI-powered foreground segmentation** (`SegmentationBiRefNet` node,
-  CoreML on CPU+GPU) — BiRefNet `lite` and `general` `.mlpackage` models live in
-  [`ai-models/`](ai-models/). See [docs/user/segmentation.md](docs/user/segmentation.md)
-  and [ai-models/README.md](ai-models/README.md).
+- **4 CoreML models** at [`ai-models/`](ai-models/) with native C++ wrappers:
+    - **BiRefNet** (× 2 variants) — foreground segmentation. `cpuAndGPU`
+      (ANE hangs).
+    - **YOLOv8n** — sphere detection. Runs on ANE (3× faster than GPU). Replaces
+      upstream's ONNX Runtime `sphereDetection`.
+    - **MoGe-2** (DINOv2 ViT-B/14) — monocular geometry / depth. Partial ANE,
+      1.2× over GPU. Replaces the Phase 14.7 honest stub.
+    - **TinyRoMa** — dense optical-flow matcher. `cpuAndGPU` (ANE is **4×
+      slower** here due to `grid_sample` handoffs — counter to all the other
+      models). Replaces the Phase 14.7 honest pass-through.
+
+    Per-model integration recipe + ANE outcome matrix in
+    [`ai-models/README.md`](ai-models/README.md).
+- **Native pyalicevision SWIG bindings** for `hdr` / `sfmData` / `sfmDataIO`.
+  Built when `AV_BUILD_PYALICEVISION=ON` (default); auto-discovered at
+  Meshroom import time. Real C++ `estimateGroups()` runs in `LdrToHdr*`
+  descriptors; falls back to pure-Python stubs when `OFF`.
+- **Python Meshroom integration** at `meshroom-mac/` + `scripts/run_meshroom.sh`.
+  Drives upstream PySide6 Meshroom against the arm64 binaries. End-to-end
+  verified on Monstree mini3 + full datasets. The prior native SwiftUI
+  prototype was decommissioned in May 2026.
+- **Self-contained `.app` packaging** at `scripts/package_macos_app.sh`
+  (mini-dylibbundler + auto ad-hoc resign), `scripts/codesign_macos_app.sh`
+  (Developer ID path), `scripts/make_dmg.sh` (1.4 GB compressed DMG).
 - **Native plugin system** at `plugins/` — third parties can ship AI
   extensions via a self-contained `plugin.json` manifest. AI segmentation
-  is the first plugin; contract documented at
+  is the reference implementation:
   [docs/dev/plugin-system.md](docs/dev/plugin-system.md).
 - **Apple Silicon optimization deep-dive** —
   [docs/dev/apple-silicon-optimization.md](docs/dev/apple-silicon-optimization.md):
   UMA, Metal, ANE, CPU performance with measured numbers.
-- **Comprehensive docs site** at `docs/` (MkDocs Material, 24 pages, 21
-  Mermaid diagrams, dark mode, search).
+- **Comprehensive docs site** at <https://seedexr.github.io/alicevision-for-mac/>
+  (MkDocs Material). Deploys from `main` via `.github/workflows/docs.yml`.
 
 ---
 
@@ -56,8 +72,8 @@ Native Apple Silicon Metal port of [AliceVision](https://alicevision.org/)
 ```bash
 # 1. Install Homebrew deps
 brew install alembic assimp boost ceres-solver eigen geogram imath \
-             lemon libomp nanoflann onnxruntime open-mesh openexr \
-             openimageio python@3.13
+             lemon libomp nanoflann onnxruntime open-mesh opencv \
+             openexr openimageio python@3.13 swig
 
 # 2. Set up the upstream symlink (one-time)
 git clone https://github.com/alicevision/AliceVision.git ../alicevision-windows/AliceVision
@@ -67,7 +83,8 @@ ln -s ../alicevision-windows/AliceVision upstream
 cmake -S . -B build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DAV_BUILD_UPSTREAM=ON \
-    -DAV_BUILD_UPSTREAM_DEPTHMAP=ON
+    -DAV_BUILD_UPSTREAM_DEPTHMAP=ON \
+    -DAV_BUILD_PYALICEVISION=ON
 cmake --build build
 ```
 
@@ -124,7 +141,7 @@ Full layout in [`docs/dev/codebase-navigation.md`](docs/dev/codebase-navigation.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
 - Open an issue before any non-trivial PR.
-- Tests must pass: `ctest -j8: 37/37` + `pytest tests/python: 11 passed, 1 skipped`.
+- Tests must pass: `ctest -j8: 37/37` + `pytest tests/python: 73 passed, 25 skipped`.
 - For perf changes: include before/after numbers via `AV_PROFILE_ADAPTER=ON`.
 - For numerical-kernel changes: validate against a CPU-FP64 reference.
 - Don't modify `upstream/` (it's a read-only symlink).
@@ -135,12 +152,19 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
 ## Known issues
 
 - **Notarization deferred** — requires Apple Developer ID Application
-  credentials. Ad-hoc-signed tarball ships today for dev distribution;
-  Gatekeeper will prompt on first launch.
-- **Release tarball NOT fully vendored** — consumers need the Homebrew
-  packages listed in `Formula/alicevision-for-mac.rb`.
-- **LiDAR pipeline disabled** (`ALICEVISION_BUILD_LIDAR=OFF`); requires
-  upstream's `E57Format` library which is not vendored.
+  credentials. Ad-hoc-signed binaries + DMG ship today for dev
+  distribution; Gatekeeper will prompt on first launch. Run
+  `scripts/codesign_macos_app.sh --identity "Developer ID Application: ..."`
+  for production signing.
+- **Self-contained `.app` ships, full DMG bundling done** — 91 dylibs /
+  155 MB bundled via `scripts/package_macos_app.sh`; `.app` runs without
+  `/opt/homebrew` on the DYLD path. The Homebrew formula path is also
+  supported for users who prefer system-managed deps.
+- **21 of 25 templates are covered-but-load-only** — every binary is
+  present and every descriptor resolves, but full E2E for HDR / panorama /
+  photometric stereo / cameraTracking templates needs the right fixture
+  datasets (bracketed exposures, calibration spheres, LIDAR e57s, etc.).
+  Not a code blocker — data work.
 - **Coin-OR Clp shimmed** — `OSIXSolver` is a no-op stub
   (`cmake/shims/.../OSIXSolver.hpp`). The single LP consumer
   (`geometry::halfPlane::isNotEmpty()`) gets a safe over-approximation.

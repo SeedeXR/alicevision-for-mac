@@ -1,12 +1,18 @@
 # CLI binaries
 
-12 ARM64 native `aliceVision_*` binaries ship with the release tarball /
-Homebrew formula. All preserve the upstream AliceVision CLI surface
-unchanged (no renamed flags). For per-flag detail use `--help` on the
+**60 ARM64 native `aliceVision_*` binaries** ship with the release tarball /
+Homebrew formula, covering every node referenced by the upstream 2026.1.0
+Meshroom template set. All preserve the upstream AliceVision CLI surface
+unchanged (no renamed flags). For per-flag detail use `-h` on the
 binary itself; this page summarizes what each one does and how it fits the
 pipeline.
 
-## Pipeline order
+The classic 11-binary photogrammetry chain below is the original Phase 1
+scope. The other 49 binaries (modern SfM, HDR, panorama, photometric stereo,
+LIDAR, camera tracking, utilities, Mac-port-native ML wrappers) were added
+in Phases 14.1–14.9.
+
+## Pipeline order — classic photogrammetry chain
 
 ```mermaid
 flowchart LR
@@ -197,3 +203,84 @@ Full docs:
 - User guide: [AI segmentation](../user/segmentation.md)
 - Developer guide: [Segmentation pipeline](../dev/segmentation-pipeline.md)
 - Reference (flags, env vars): [Segmentation reference](segmentation.md)
+
+---
+
+## Phase 14.1–14.9 additions (the other 49 binaries)
+
+These were added across nine focused phases between 2026-05-23 and
+2026-05-24 to bring template coverage from 4/25 to 25/25.
+
+### Modern SfM stack (Phase 14.1, 6 binaries)
+
+`aliceVision_sfmBootstrapping`, `aliceVision_sfmExpanding`,
+`aliceVision_relativePoseEstimating`, `aliceVision_sfmTriangulation`,
+`aliceVision_tracksBuilding`, `aliceVision_meshDecimate`.
+
+Used by `photogrammetry.mg`, `cameraTracking*.mg`. Needed a CMake-time
+`relativePoses.hpp` inline patch (ODR fix — upstream defines two
+`tag_invoke` free functions in the header without `inline`).
+
+### HDR pipeline (Phase 14.2, 3 binaries)
+
+`aliceVision_LdrToHdrSampling`, `aliceVision_LdrToHdrCalibration`,
+`aliceVision_LdrToHdrMerge`. New `aliceVision_hdr` sublib via
+`add_subdirectory`. Drives `hdrFusion.mg`.
+
+### Panorama (Phase 14.3, 8 binaries + bonus)
+
+`aliceVision_panoramaInit`, `panoramaPrepareImages`, `panoramaWarping`,
+`panoramaEstimation`, `panoramaCompositing`, `panoramaMerging`,
+`panoramaSeams`, `panoramaPostProcessing`. Plus bonus `aliceVision_sfmTransform`
+which unblocked `panoramaHdr.mg` + `panoramaFisheyeHdr.mg`. New
+`aliceVision_panorama` sublib.
+
+### Photometric stereo (Phase 14.4)
+
+- **a (3 binaries)** — `aliceVision_lightingCalibration`,
+  `aliceVision_photometricStereo` (binary target name `_bin` + `OUTPUT_NAME`
+  to avoid target-name collision with the static lib), bonus
+  `aliceVision_sfmTransfer`. New `aliceVision_photometricStereo` +
+  `aliceVision_lightingEstimation` sublibs. OpenCV `find_package` added.
+- **b (1 binary, CoreML)** — `aliceVision_sphereDetection` is a **Mac-native
+  CoreML port** replacing upstream's ONNX-Runtime sphereDetection. Wraps
+  `ai-models/yolov8n.mlpackage` via `src/sphere_detection/`. Runs the full
+  graph on ANE (3× faster than GPU).
+
+### Utility + lidar (Phase 14.5, 21 binaries)
+
+Camera tracking utilities: `applyCalibration`, `checkerboardDetection`,
+`colorCheckerCorrection`, `colorCheckerDetection`, `convertDistortion`,
+`convertSfMFormat`, `depthmapTracksInjecting`, `distortionCalibration`,
+`exportDistortion`, `exportImages`, `geometricFilterEstimating`,
+`imageProcessing` (`_bin` rename), `intrinsicsTransforming`,
+`keyframeSelection`, `nodalSfM`, `sfmColorizing`, `sfmMerge`,
+`tracksMerging`.
+
+LIDAR: `lidarDecimating`, `lidarMerging`, `lidarMeshing`.
+
+New sublibs: `aliceVision_calibration`, `aliceVision_keyframe`,
+`aliceVision_imageProcessing` (each PUBLIC_LINKS OpenCV).
+
+### Alembic export (Phase 14.6, 2 binaries)
+
+`aliceVision_exportAlembic`, `aliceVision_exportAnimatedCamera`. Required
+flipping `ALICEVISION_HAVE_ALEMBIC=1` BEFORE `add_subdirectory(sfmDataIO)`
+so the existing upstream sublib's own `if(...)` block folded
+AlembicExporter/Importer in.
+
+Unlocks 8 cameraTracking-family templates.
+
+### Mac-port-native (Phase 14.7–14.9, 3 binaries)
+
+For 2026.1.0 features upstream defers to external Python pipelines (no
+C++ source in our snapshot). Mac-port-native implementations:
+
+| Binary | Phase | Implementation |
+|---|---|---|
+| `aliceVision_starListing` | 14.7 | Algorithmic (star-topology image pair list). `src/native_binaries/main_starListing.cpp`. |
+| `aliceVision_matchMasking` | 14.9 | **CoreML TinyRoMa** (replaces Phase 14.7 pass-through). Runs the dense matcher on each pair; writes per-pair `_coarse_flow.exr`, `_fine_flow.exr`, `_coarse_certainty.exr`, `_fine_certainty.exr`. Optional mask-aware filtering. `src/roma/`. |
+| `aliceVision_moGe` | 14.8 | **CoreML MoGe-2** (replaces Phase 14.7 stub). Per-view depth + normals at 504×672. `src/moge/`. |
+
+See [`ai-models/README.md`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/ai-models/README.md)
+for the per-model CoreML integration recipe + ANE outcome matrix.

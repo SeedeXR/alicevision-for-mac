@@ -13,6 +13,7 @@ Every `option(AV_*)` declared in the root `CMakeLists.txt`. Flip with
 | `AV_BUILD_UPSTREAM_DEPTHMAP` | `OFF` | Build the 12-module upstream subset depthMap depends on. Combined with `AV_BUILD_UPSTREAM=ON` produces the 12 `aliceVision_*` binaries. See [Project overview](../dev/overview.md) for the "Path C" rationale. |
 | `AV_USE_HOMEBREW_DEPS` | `ON` | Shell out to `brew --prefix` and prepend it to `CMAKE_PREFIX_PATH`. Set OFF only with a pre-populated `CMAKE_PREFIX_PATH`. |
 | `AV_PROFILE_ADAPTER` | `OFF` | Enable the per-forwarder timing accumulator (S43). When ON, every `cuda_*` adapter records RAII timings and prints a sorted table on `std::atexit`. Zero cost when OFF (macro is `do{}while(0)`). See [Performance profiling](../dev/perf.md). |
+| `AV_BUILD_PYALICEVISION` | `ON` | Build the native C++ `pyalicevision` SWIG bindings (Phase 13). When ON, `find_package(SWIG)` + `find_package(Python3 ... Development.Module NumPy)` are wired in and `ALICEVISION_BUILD_SWIG_BINDING` is flipped to ON, which activates each upstream sublib's `alicevision_swig_add_library(...)` block. Three modules ship today: `hdr`, `sfmData`, `sfmDataIO`. Outputs land at `build/pyalicevision_native/` and are auto-discovered by `src/python_shim/pyalicevision/__init__.py` via `__path__` manipulation. When OFF, the pure-Python stubs at `src/python_shim/pyalicevision/{hdr,sfmData,sfmDataIO}.py` take over. **macOS-specific gotcha**: the SWIG `.i` files use `#ifdef LINUXPLATFORM` to choose `size_t` typedef; our shim passes `-DLINUXPLATFORM` so SWIG generates `unsigned long` (matching darwin's `__darwin_size_t`) instead of `unsigned long long`. |
 
 ## Additional CMake-level toggles
 
@@ -83,4 +84,5 @@ option(AV_BUILD_UPSTREAM         "Configure upstream/AliceVision (separate)"  OF
 option(AV_BUILD_UPSTREAM_DEPTHMAP "Build the upstream depthMap-only dep tree" OFF)
 option(AV_USE_HOMEBREW_DEPS      "Resolve dependencies via Homebrew prefix"   ON)
 option(AV_PROFILE_ADAPTER        "Profile cuda_* adapter forwarders (S43)"    OFF)
+option(AV_BUILD_PYALICEVISION    "Build C++ pyalicevision SWIG bindings"      ON)
 ```

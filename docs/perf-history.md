@@ -162,3 +162,65 @@ internal aggregate-cost / compute-best-z costs as the next ceiling.
 The full per-session writeups (with the threadgroup-sweep tables, the
 sub-kernel breakdowns, and the rationale) live in
 `memory/perf_optimization_s44.md` and `memory/perf_optimization_s45.md`.
+
+---
+
+## CoreML model performance (2026-05-24)
+
+Four CoreML models ship in [`ai-models/`](https://github.com/SeedeXR/alicevision-for-mac/tree/main/ai-models)
+and are wrapped natively in C++ for the Mac port. Each has a different
+ANE-vs-GPU outcome — the optimal `MLComputeUnits` setting differs per
+model and is documented at load time in the wrapper.
+
+| Model | Size | Input | Native binary | Compute units | Per-call latency |
+|---|---|---|---|---|---|
+| `BiRefNet_lite.mlpackage` | 90 MB | 1024×1024 RGB | (Python plugin) | `cpuAndGPU` | ~350 ms |
+| `BiRefNet.mlpackage` | 447 MB | 1024×1024 RGB | (Python plugin) | `cpuAndGPU` | ~980 ms |
+| `yolov8n.mlpackage` | 13 MB | 640×640 RGB | `aliceVision_sphereDetection` | `.all` (ANE) | ~30 ms |
+| `moge2_504x672_t1728.mlpackage` | 187 MB | 504×672 RGB | `aliceVision_moGe` | `.all` (partial ANE) | ~228 ms |
+| `tiny_roma_v1_480x640.mlpackage` | 5.5 MB | 480×640 RGB × 2 | `aliceVision_matchMasking` | `cpuAndGPU` (NOT `.all`) | ~12 ms / pair |
+
+### TinyRoMa benchmark — the canary for `grid_sample`-bearing models
+
+User benchmark on Apple Silicon (5-iter mean after 2 warm-ups,
+subprocess-isolated):
+
+| Compute units | Load (s) | Predict (ms) | vs CPU |
+|---|---:|---:|---:|
+| `cpuOnly` | 0.10 | 22.4 | 1.0× |
+| `cpuAndGPU` | 0.18 | **12.1** | 1.9× |
+| `cpuAndNeuralEngine` | 0.83 | 84.3 | **0.27× (slower!)** |
+| `all` | 0.63 | 21.8 | ≈ CPU (planner falls back) |
+
+`cpuAndGPU` is the production target — 1.9× over CPU at 480×640. ANE is
+4× slower because TinyRoMa's decoder has two `grid_sample` ops that each
+force a CPU↔ANE memory handoff. For a tiny 2.84 M-param model, the
+fixed per-handoff cost dominates the compute savings. **"Compiles to
+ANE" ≠ "runs faster on ANE"** — TinyRoMa is the canary for that gotcha.
+
+### ANE outcome matrix (all 4 models)
+
+```mermaid
+flowchart LR
+    A[BiRefNet ViT] -->|ANE compile hangs| FAIL1[cpuAndGPU]
+    B[YOLOv8n] -->|Full graph on ANE, 3× over GPU| WIN[.all]
+    C[MoGe-2 DINOv2] -->|Partial ANE, 1.2× over GPU| OK[.all]
+    D[TinyRoMa] -->|2× grid_sample handoffs, 4× SLOWER| FAIL2[cpuAndGPU]
+
+    style FAIL1 fill:#ef5350,color:#fff
+    style FAIL2 fill:#ef5350,color:#fff
+    style WIN fill:#43a047,color:#fff
+    style OK fill:#ffa726,color:#fff
+```
+
+Recipe for adding the next CoreML model:
+
+1. Convert to fixed-shape `.mlpackage` (FP16 unless argmax sensitivity).
+2. Benchmark each `MLComputeUnits` setting in a subprocess-isolated
+   harness (2 warmup, 5 measured, take median).
+3. Pick the fastest. Document the result in [`ai-models/README.md`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/ai-models/README.md).
+4. Write the wrapper at `src/<name>/` mirroring `src/sphere_detection/`.
+   Pure-C++ public header + Objective-C++ implementation + load-time
+   I/O schema validation.
+
+Per-model deep-dive: [`ai-models/README.md`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/ai-models/README.md).

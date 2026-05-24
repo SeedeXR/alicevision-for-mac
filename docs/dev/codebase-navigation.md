@@ -137,7 +137,7 @@ kernels run — everything else is upstream's CPU code.
 | Bridge a new upstream `cuda_*` function | `src/depth_map_metal/src/upstream_adapter.cpp` |
 | Add a pipeline binary | `CMakeLists.txt` → search for `aliceVision_depthMapEstimation` block; copy + adapt |
 | Add an AI plugin | `plugins/<name>/` — see [Plugin system](plugin-system.md) |
-| Re-convert a BiRefNet model | `models/convert/convert_to_coreml.py` — see [ai-models/README.md](../../ai-models/README.md) |
+| Re-convert a BiRefNet model | `models/convert/convert_to_coreml.py` — see [ai-models/README.md](https://github.com/SeedeXR/alicevision-for-mac/blob/main/ai-models/README.md) |
 | Fix a Meshroom integration issue | `patches/meshroom/` or `patches/alicevision-meshroom/` (Python source; .patch format) |
 | Add a doc page | `docs/<section>/<page>.md`; nav in `mkdocs.yml` |
 | Add a Homebrew dep | discuss in an issue first, then `CMakeLists.txt` find_package + `Formula/alicevision-for-mac.rb` depends_on |

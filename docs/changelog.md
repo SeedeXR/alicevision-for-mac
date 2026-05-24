@@ -150,30 +150,82 @@ tests, scripts, and per-page documentation have been removed.
   cannot be planned by the ANE compiler); `MLComputeUnits.cpuAndGPU` is
   the production target on Apple Silicon.
 
-## Current state (2026-05-23)
+## Phase 13 + 14 — Feature parity sprint (2026-05-23 → 2026-05-24)
 
-- 12 pipeline binaries, ARM64 native, codesigned.
-- 32 upstream modules compiled.
+Brought the port from 12 to **60 binaries** and from **4 of 25 to 25 of 25
+covered** Meshroom templates in nine focused phases. Full per-phase notes are
+in the top-level [CHANGELOG.md](https://github.com/SeedeXR/alicevision-for-mac/blob/main/CHANGELOG.md);
+high-level recap:
+
+- **Phase 14.1** — 6 modern-SfM binaries (`sfmBootstrapping`, `sfmExpanding`,
+  `relativePoseEstimating`, `sfmTriangulation`, `tracksBuilding`, `meshDecimate`)
+  + a CMake-time inline patch for `relativePoses.hpp` (ODR fix).
+- **Phase 14.2** — 3 HDR binaries (`LdrToHdrSampling`, `LdrToHdrCalibration`,
+  `LdrToHdrMerge`). `hdrFusion` template covered.
+- **Phase 14.3** — 8 panorama binaries + bonus `sfmTransform`. `panoramaHdr`
+  + `panoramaFisheyeHdr` covered.
+- **Phase 14.4a** — `lightingCalibration` + `photometricStereo` binaries + 2
+  photometric sublibs. OpenCV `find_package` wired in.
+- **Phase 14.4b** — **CoreML port of `sphereDetection`** (replaces upstream's
+  ONNX Runtime). New `src/sphere_detection/` module wrapping
+  `ai-models/yolov8n.mlpackage`. Runs on ANE (3× faster than GPU).
+- **Phase 14.5** — 21 utility + lidar binaries via parallel agent dispatch.
+  6 templates flip to covered (`colorCalibration`, `distortionCalibration`,
+  `lidarMeshing`, `photogrammetry`, `photogrammetryObjectTwoSides`,
+  `rawImageConversion`).
+- **Phase 14.6** — Alembic enabled in the existing `sfmDataIO` sublib by
+  setting `ALICEVISION_HAVE_ALEMBIC=1` BEFORE `add_subdirectory`. 2 binaries
+  (`exportAlembic`, `exportAnimatedCamera`); 8 cameraTracking-family templates
+  flip to covered.
+- **Phase 14.7** — 3 Mac-port-native binaries at `src/native_binaries/` for
+  2026.1.0 features upstream defers to Python pipelines: `starListing`
+  (algorithmic), `matchMasking` + `moGe` (honest stubs). Coverage 25/25 in
+  the matrix sense.
+- **Phase 14.8** — **CoreML port of `moGe`** (replaces Phase 14.7 stub). New
+  `src/moge/` module wrapping `ai-models/moge2_504x672_t1728.mlpackage`
+  (DINOv2 ViT-B/14). Real per-view depth + normals at 504×672. Runs partially
+  on ANE (~228 ms vs ~384 ms CPU).
+- **Phase 14.9** — **CoreML port of `matchMasking`** (TinyRoMa, replaces Phase
+  14.7 stub). New `src/roma/` module wrapping
+  `ai-models/tiny_roma_v1_480x640.mlpackage`. CRITICAL: uses
+  `MLComputeUnitsCPUAndGPU` (not `.all`) — ANE is **4× slower** here due to
+  `grid_sample` handoffs. **Zero honest stubs remain.**
+- **Phase 13** — Native `pyalicevision` SWIG bindings (`hdr`, `sfmData`,
+  `sfmDataIO`) replace the pure-Python stubs when `AV_BUILD_PYALICEVISION=ON`.
+  Auto-discovery via `__path__` manipulation; falls back to stubs when off.
+  Critical macOS gotcha: must pass `-DLINUXPLATFORM` to SWIG to avoid a
+  `size_t` typedef mismatch with `__darwin_size_t`.
+
+## Current state (2026-05-24)
+
+- **60 pipeline binaries**, ARM64 native, codesigned.
+- 32 upstream modules + 7 new sublibs compiled (panorama, hdr,
+  photometricStereo, lightingEstimation, calibration, keyframe,
+  imageProcessing).
+- **3 native ML wrapper modules** (sphere_detection, moge, roma) + the
+  segmentation Python plugin.
 - 41 MSL kernel entry points.
 - 15 `cuda_*` adapter forwarders, audited.
 - 37/37 C++ tests pass under `ctest -j8`.
-- 11 passed / 1 skipped in `python -m pytest tests/python`.
-- 2 BiRefNet CoreML models shipped at `ai-models/` (90 MB `lite` + 447 MB
-  `general`); on M-series GPU ~350 / ~980 ms per 1024² frame.
-- End-to-end Monstree mini3 → textured 3D mesh in ~1 min on M4.
-- Release tarball + Homebrew formula in place (formula needs published
-  GitHub release URL).
+- **73 passed / 25 skipped** in `pytest tests/python` (gated heavy E2E
+  behind `RUN_*=1` env vars).
+- **4 CoreML models** at `ai-models/`:
+  BiRefNet × 2 (`cpuAndGPU`), YOLOv8n (`.all` / ANE),
+  MoGe-2 (`.all` / partial ANE), TinyRoMa (`cpuAndGPU` — ANE is a regression).
+- **25 / 25 Meshroom templates covered**.
+- 4 templates E2E-verified end-to-end on Monstree mini3 in ~1 min on M4.
+- Self-contained `.app` bundling (155 MB dylibs) + DMG packaging shipped.
 
 ## Roadmap
 
-Open in `memory/todo.md`:
+For the remaining 21 covered-but-load-only templates to be E2E-verified,
+fixture datasets are needed (HDR brackets, calibration spheres, LIDAR
+`.e57`s, checkerboards, RAW images, calibrated video footage, etc.).
+That's data collection, not code.
 
-- **S48 (current)**: docs site (this), native UI M7/M8/M9, `llms.txt`
-  generation, Phase 14 R4 (refine_similarity threadgroup reshape), ctest
-  flake investigation.
-- **Phase 12 finish**: Developer-ID signing, `notarytool` integration,
-  `dylibbundler` for a fully-vendored tarball.
-- **Phase 3**: Unified `aliceVision` binary with subcommand dispatch.
-- **Native UI M7-M9**: cache UI, 3D viewer (Metal), asset library.
-- **Custom mipmap cascade**: bit-match the upstream
-  `deviceMipmappedArray.cu` for future numerical-parity work.
+Code-side items still open:
+
+- Developer-ID notarization (`scripts/codesign_macos_app.sh --identity` path).
+- Unified `aliceVision` binary with subcommand dispatch.
+- Custom mipmap cascade to bit-match upstream `deviceMipmappedArray.cu`.
+- Roma at FP32 for sub-1% argmax-sensitivity diff (currently FP16, 2.3% rel max).

@@ -2,17 +2,21 @@
 
 **AliceVision photogrammetry + Meshroom on Apple Silicon Metal.**
 
-12 native ARM64 binaries. End-to-end pipeline (raw photos → textured 3D mesh).
-Drives upstream's PySide6 Meshroom on Apple Silicon. AI foreground segmentation
-via BiRefNet CoreML. Open-source, MPL-2.0.
+**60 native ARM64 binaries** covering the full 25-of-25 Meshroom template set.
+End-to-end pipeline (raw photos → textured 3D mesh). Drives upstream's PySide6
+Meshroom on Apple Silicon. **4 CoreML models** (BiRefNet, YOLOv8n, MoGe-2,
+TinyRoMa) integrated for AI inference. Native C++ SWIG bindings replace
+load-time Python stubs. Open-source, MPL-2.0.
 
-!!! info "Status (2026-05-23)"
-    Full pipeline runs end-to-end on `dataset_monstree/mini3` (3 JPGs @ 4032×3024)
-    producing a textured 3D mesh in roughly 1 minute on an M4.
-    Validation suite: **37/37 ctest pass** on a clean build,
-    **11 passed / 1 skipped** in `pytest tests/python`. The standalone SwiftUI
-    prototype was decommissioned 2026-05-23; the only Meshroom frontend going
-    forward is upstream's PySide6 Meshroom run via `meshroom-mac/`.
+!!! success "Status (2026-05-24) — feature-complete vs upstream 2026.1.0"
+    **60 aliceVision_* binaries** built. **25 of 25 Meshroom templates covered**
+    by the pipeline coverage matrix — every binary the templates reference is
+    present, every node descriptor is resolved, zero "honest stubs" remain.
+    **73 passing pytest** in the always-on suite + 25 skipped (gated heavy E2E).
+    4 of those templates are end-to-end-verified on `dataset_monstree/mini3`
+    (Draft / Legacy / Object / Turntable). The remaining 21 are
+    covered-but-load-only — they need real fixture datasets (HDR brackets,
+    calibration spheres, LIDAR e57s, etc.) to be E2E-exercised, not code.
 
 ---
 
@@ -27,20 +31,30 @@ rest of the upstream tree is compiled unmodified through a CMake shim layer.
 
 The result:
 
-- **12 ARM64-native `aliceVision_*` pipeline binaries** —
-  `cameraInit`, `featureExtraction`, `imageMatching`, `featureMatching`,
-  `incrementalSfM`, `prepareDenseScene`, `depthMapEstimation`,
-  `depthMapFiltering`, `meshing`, `meshFiltering`, `texturing`,
-  `importMiddlebury`. See [Reference → CLI binaries](reference/binaries.md).
+- **60 ARM64-native `aliceVision_*` pipeline binaries**, grouped by area:
+  photogrammetry core (11), modern SfM (6), HDR (3), panorama (8), photometric
+  stereo (3), camera tracking + utilities (22), LIDAR (3), Mac-port-native
+  (3 — `starListing`, `matchMasking`, `moGe`), Middlebury import (1).
+  See [Reference → CLI binaries](reference/binaries.md).
 - **35 Metal kernel entry points** across 15 `.metal` files in
   `src/shaders/depth_map/`, validated against CUDA reference with FP32-ULP
   agreement on the SGM core. See [Reference → Metal kernels](reference/kernels.md).
-- **Meshroom integration via 4 Darwin patches** that add macOS support to
-  upstream Meshroom without modifying its tree. See
-  [User → Meshroom integration](user/meshroom.md).
+- **4 CoreML models** wrapped natively in `src/sphere_detection/`,
+  `src/moge/`, `src/roma/` (+ Python plugin for BiRefNet):
+    - **BiRefNet** (segmentation) — `cpuAndGPU`, hangs on ANE.
+    - **YOLOv8n** (sphere detection) — `.all` (full ANE), 3× faster than GPU.
+    - **MoGe-2** (monocular geometry / depth) — `.all` (partial ANE), 1.2× over GPU.
+    - **TinyRoMa** (dense matching) — `cpuAndGPU`, 4× slower on ANE due to
+      `grid_sample` handoffs (canary for that gotcha).
+- **Native C++ SWIG bindings** at `pyalicevision.hdr`, `.sfmData`, `.sfmDataIO`
+  — real C++ `estimateGroups()` in `LdrToHdr*` descriptors instead of Python
+  stubs returning `[]`. Auto-discovered at import time via `__path__`
+  manipulation; falls back to pure-Python stubs when `AV_BUILD_PYALICEVISION=OFF`.
+- **Meshroom integration via 4 Darwin patches** + 9 new Mac-port-native
+  descriptors (`ScenePreview`, `SegmentationBiRefNet`, `MoGe`, `MatchMasking`,
+  `StarListing`, etc.). See [User → Meshroom integration](user/meshroom.md).
 - **AI foreground segmentation** via the `SegmentationBiRefNet` Meshroom node
-  backed by pre-converted CoreML models in `ai-models/` (BiRefNet `lite` and
-  `general`, CPU+GPU compute units). See
+  backed by pre-converted CoreML models in `ai-models/`. See
   [User → Segmentation](user/segmentation.md).
 
 ---
@@ -50,14 +64,15 @@ The result:
 === "Build from source"
 
     ```bash
-    git clone <this-repo> alicevision-for-mac
+    git clone https://github.com/SeedeXR/alicevision-for-mac
     cd alicevision-for-mac
-    brew install cmake ninja eigen boost ceres-solver openimageio openexr \
-        imath libomp pkgconf alembic assimp geogram lemon nanoflann \
-        onnxruntime open-mesh
+    brew install cmake ninja swig eigen boost ceres-solver openimageio \
+        openexr imath libomp pkgconf alembic assimp geogram lemon \
+        nanoflann open-mesh opencv onnxruntime
     cmake -S . -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
-        -DAV_BUILD_UPSTREAM=ON -DAV_BUILD_UPSTREAM_DEPTHMAP=ON
+        -DAV_BUILD_UPSTREAM=ON -DAV_BUILD_UPSTREAM_DEPTHMAP=ON \
+        -DAV_BUILD_PYALICEVISION=ON
     cmake --build build
     ctest --test-dir build              # 37/37 expected
     ```
@@ -66,7 +81,7 @@ The result:
 
     ```bash
     cd build
-    # The 12 binaries are at build/aliceVision_*. Drive them with our
+    # The 60 binaries are at build/aliceVision_*. Drive them with our
     # Meshroom wrapper script (see User → Meshroom integration):
     ../scripts/run_meshroom.sh python bin/meshroom_batch \
         -i ../dataset_monstree/mini3 \
@@ -74,13 +89,21 @@ The result:
         -p photogrammetryLegacy
     ```
 
-=== "AI segmentation"
+=== "Always-on tests"
 
     ```bash
-    # Models are pre-shipped at ai-models/ — no download required.
-    # Run the segmentation node through Meshroom; see docs/user/segmentation.md
-    # for the full graph wiring.
-    pytest tests/python -k segmentation     # 11 passed, 1 skipped expected
+    # Always-on Python tests (no fixture data needed).
+    pytest tests/python                  # 73 passed, 25 skipped expected
+    ```
+
+=== "AI inference smoke tests (gated)"
+
+    ```bash
+    # Real CoreML model inference on a Monstree photo / photo-pair.
+    RUN_SEG_E2E=1               pytest tests/python -k segmentation
+    RUN_SPHERE_DETECTION=1      pytest tests/python -k sphere_detection
+    RUN_MOGE_COREML=1           pytest tests/python -k moge_coreml
+    RUN_ROMA_COREML=1           pytest tests/python -k roma_coreml
     ```
 
 ---

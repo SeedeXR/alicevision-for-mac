@@ -35,14 +35,14 @@ its CPU fallback ran at 6–10 s per frame. The plugin is now CoreML-only.
 
 | Path | Role |
 |---|---|
-| [`plugins/ai-segmentation/nodes/aliceVision/SegmentationBiRefNet.py`](../../plugins/ai-segmentation/nodes/aliceVision/SegmentationBiRefNet.py) | Meshroom `desc.Node` descriptor. `inputs`, `outputs`, `processChunk`. |
-| [`plugins/ai-segmentation/python/segmentation/__init__.py`](../../plugins/ai-segmentation/python/segmentation/__init__.py) | `ensure_models_dir()`, repo-root + ai-models constants. |
-| [`plugins/ai-segmentation/python/segmentation/session.py`](../../plugins/ai-segmentation/python/segmentation/session.py) | `BiRefNetCoreMLSession`, `get_session(variant)`, `_resolve_package_path`, module-level `_SESSION_CACHE`. |
-| [`plugins/ai-segmentation/python/segmentation/utils.py`](../../plugins/ai-segmentation/python/segmentation/utils.py) | `log_compute_backend()`, `coremltools_version()`. |
-| [`ai-models/`](../../ai-models/) | Local mlpackage staging. `BiRefNet_lite.mlpackage` + `BiRefNet.mlpackage` live here; git-ignored (large). |
-| [`models/`](../../models/) | BiRefNet HF checkpoints (`lite/`, `general/`) + conversion pipeline (`convert/`). |
-| [`models/production_note.md`](../../models/production_note.md) | Production-decision document. Read this before changing anything. |
-| [`plugin.json`](../../plugins/ai-segmentation/plugin.json) | Plugin manifest. Consumed by `MESHROOM_NODES_PATH` discovery and `tests/test_plugin_manifest.py`. |
+| [`plugins/ai-segmentation/nodes/aliceVision/SegmentationBiRefNet.py`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/plugins/ai-segmentation/nodes/aliceVision/SegmentationBiRefNet.py) | Meshroom `desc.Node` descriptor. `inputs`, `outputs`, `processChunk`. |
+| [`plugins/ai-segmentation/python/segmentation/__init__.py`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/plugins/ai-segmentation/python/segmentation/__init__.py) | `ensure_models_dir()`, repo-root + ai-models constants. |
+| [`plugins/ai-segmentation/python/segmentation/session.py`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/plugins/ai-segmentation/python/segmentation/session.py) | `BiRefNetCoreMLSession`, `get_session(variant)`, `_resolve_package_path`, module-level `_SESSION_CACHE`. |
+| [`plugins/ai-segmentation/python/segmentation/utils.py`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/plugins/ai-segmentation/python/segmentation/utils.py) | `log_compute_backend()`, `coremltools_version()`. |
+| [`ai-models/`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/ai-models/) | Local mlpackage staging. `BiRefNet_lite.mlpackage` + `BiRefNet.mlpackage` live here; git-ignored (large). |
+| [`models/`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/models/) | BiRefNet HF checkpoints (`lite/`, `general/`) + conversion pipeline (`convert/`). |
+| [`models/production_note.md`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/models/production_note.md) | Production-decision document. Read this before changing anything. |
+| [`plugin.json`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/plugins/ai-segmentation/plugin.json) | Plugin manifest. Consumed by `MESHROOM_NODES_PATH` discovery and `tests/test_plugin_manifest.py`. |
 
 The node is discovered by Meshroom via `MESHROOM_NODES_PATH` (set by
 `scripts/run_meshroom.sh` from each `plugins/*/nodes/` directory) — the
@@ -64,9 +64,9 @@ does three load-bearing things:
    compile pass at save time.
 
 Full reproducibility recipe in
-[`ai-models/README.md`](../../ai-models/README.md). Apple-Silicon
+[`ai-models/README.md`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/ai-models/README.md). Apple-Silicon
 production-decision rationale in
-[`models/production_note.md`](../../models/production_note.md).
+[`models/production_note.md`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/models/production_note.md).
 
 ### Loading at runtime
 
@@ -122,7 +122,7 @@ the first-predict Metal-pipeline JIT.
 
 ## Why the ANE is off the table
 
-Quick summary of [`models/production_note.md`](../../models/production_note.md):
+Quick summary of [`models/production_note.md`](https://github.com/SeedeXR/alicevision-for-mac/blob/main/models/production_note.md):
 
 - BiRefNet's `ASPPDeformable` decoder uses deformable convolution v2.
   Dropping deformable behaviour produces visibly broken masks (holes

@@ -1,8 +1,9 @@
 site_name: AliceVision for Mac
 site_description: Apple Silicon-native AliceVision + Meshroom photogrammetry pipeline
-site_url: https://github.com/placeholder/alicevision-for-mac
-repo_url: https://github.com/placeholder/alicevision-for-mac
-repo_name: alicevision-for-mac
+site_url: https://seedexr.github.io/alicevision-for-mac/
+repo_url: https://github.com/SeedeXR/alicevision-for-mac
+repo_name: SeedeXR/alicevision-for-mac
+edit_uri: edit/main/docs/
 copyright: Copyright &copy; 2026 — MPL-2.0 licensed. Built on the AliceVision and Meshroom upstreams.
 
 theme:
@@ -80,10 +81,12 @@ nav:
     - dev/overview.md
     - dev/architecture.md
     - dev/build.md
+    - dev/codebase-navigation.md
     - dev/adding-kernel.md
     - dev/adapter.md
     - dev/perf.md
     - dev/segmentation-pipeline.md
+    - dev/plugin-system.md
     - dev/apple-silicon-optimization.md
     - dev/testing.md
   - Reference:
