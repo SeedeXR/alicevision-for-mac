@@ -133,8 +133,24 @@ run_step() {
 
     if [ "$rc" -ne 0 ]; then
         log_err "Step $num ('$name') FAILED (exit $rc, $(fmt_dur "$dur"))."
-        log_err "Last 30 lines of the log:"
-        tail -n 30 "$logfile" >&2 || true
+        # First try to surface the REAL error rather than dumping
+        # `tail -n 30` blindly — clang prints lots of warnings
+        # (-Winconsistent-missing-override etc.) and ninja can emit
+        # hundreds of warning lines before the actual compile failure
+        # line, so a naive tail buries the cause. Grep for the canonical
+        # failure signatures first; fall back to tail if no match.
+        local err_excerpt
+        err_excerpt=$(grep -nE \
+            '^FAILED:|fatal error:|^[^:]+: error:|undefined (reference|symbol)|ld: error|cannot find|No such file or directory|ninja: error:' \
+            "$logfile" 2>/dev/null | head -n 30 || true)
+        if [ -n "$err_excerpt" ]; then
+            log_err "Error excerpt (grepped from $logfile):"
+            printf '%s\n' "$err_excerpt" >&2
+            log_err "Full log preserved at: $logfile"
+        else
+            log_err "No FAILED:/error: lines matched — falling back to tail -n 30:"
+            tail -n 30 "$logfile" >&2 || true
+        fi
         exit "$rc"
     fi
     log_ok "Step $num done in $(fmt_dur "$dur")."
