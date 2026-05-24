@@ -48,14 +48,20 @@ log = logging.getLogger(__name__)
 
 
 # Single-vertex stride for our interleaved layout:
-#   position (3 × float32) + color (4 × float32, RGBA) = 28 bytes.
+#   position (3 × float32) + normal (3 × float32) + color (4 × float32 RGBA)
+#     = 12 + 12 + 16 = 40 bytes.
 # We pack color as float32 RGBA rather than uint8 because QtQuick3D's
 # vertex shader expects PrincipledMaterial's vertex-color attribute as
 # normalized floats; doing the float conversion CPU-side is one less
 # vertex-shader op per draw.
+# When PLY data carries no normals (the common AliceVision dense-cloud
+# case), we write a sentinel (0,0,1) per vertex so the lighting-disabled
+# material path still works correctly + the buffer layout stays
+# consistent across files.
 _POS_OFFSET = 0
-_COLOR_OFFSET = 12
-_VERTEX_STRIDE = 28
+_NORMAL_OFFSET = 12
+_COLOR_OFFSET = 24
+_VERTEX_STRIDE = 40
 
 
 class PointCloudGeometry(QQuick3DGeometry):
@@ -145,16 +151,21 @@ class PointCloudGeometry(QQuick3DGeometry):
             self._point_count = 0
             self.pointCountChanged.emit()
 
-    def _upload(self, vertices: list[tuple[float, float, float, float, float, float, float]]) -> None:
-        """Pack the parsed vertices into a single interleaved GPU buffer."""
+    def _upload(self, vertices: list[tuple]) -> None:
+        """Pack parsed vertices into a single interleaved GPU buffer.
+
+        Vertex tuple shape: (x, y, z, nx, ny, nz, r, g, b, a)
+        where colors are already in [0, 1] and normals are unit-ish
+        (the parser writes (0, 0, 1) when the PLY has no normal props).
+        """
         n = len(vertices)
         buf = bytearray(n * _VERTEX_STRIDE)
         bmin = [float("inf")] * 3
         bmax = [float("-inf")] * 3
 
         offset = 0
-        for x, y, z, r, g, b, a in vertices:
-            struct.pack_into("<7f", buf, offset, x, y, z, r, g, b, a)
+        for x, y, z, nx, ny, nz, r, g, b, a in vertices:
+            struct.pack_into("<10f", buf, offset, x, y, z, nx, ny, nz, r, g, b, a)
             offset += _VERTEX_STRIDE
             if x < bmin[0]: bmin[0] = x
             if y < bmin[1]: bmin[1] = y
@@ -169,13 +180,23 @@ class PointCloudGeometry(QQuick3DGeometry):
         self.setVertexData(QByteArray(bytes(buf)))
         self.setStride(_VERTEX_STRIDE)
         self.setPrimitiveType(QQuick3DGeometry.PrimitiveType.Points)
-        # Position: location 0, 3 × float32 at offset 0.
+        # Position: 3 × float32 at offset 0.
         self.addAttribute(
             QQuick3DGeometry.Attribute.PositionSemantic,
             _POS_OFFSET,
             QQuick3DGeometry.Attribute.F32Type,
         )
-        # Per-vertex color: location 1, 4 × float32 at offset 12.
+        # Per-vertex normal: 3 × float32 at offset 12. PLY may not carry
+        # normals (the AliceVision dense cloud doesn't) — in that case
+        # the parser fills (0, 0, 1) so the buffer layout stays uniform
+        # and a future lit material renders correctly when a normal is
+        # available.
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.NormalSemantic,
+            _NORMAL_OFFSET,
+            QQuick3DGeometry.Attribute.F32Type,
+        )
+        # Per-vertex color: 4 × float32 at offset 24.
         self.addAttribute(
             QQuick3DGeometry.Attribute.ColorSemantic,
             _COLOR_OFFSET,
@@ -295,23 +316,42 @@ def _read_ply_ascii(f, n: int, props: list[tuple[str, str]]) -> list[tuple]:
     return out
 
 
-def _extract_row(row: tuple, names: list[str]) -> tuple[float, float, float, float, float, float, float]:
-    """Pick out x/y/z + r/g/b/a from a parsed property row."""
+def _extract_row(row: tuple, names: list[str]) -> tuple:
+    """Pick out x/y/z + nx/ny/nz + r/g/b/a from a parsed property row.
+
+    Returns a 10-tuple (x, y, z, nx, ny, nz, r, g, b, a). When the PLY
+    has no normal properties we emit (0, 0, 1) so a lighting-enabled
+    material still renders points (with a uniform pseudo-shading).
+    Colors are already in [0, 1] in the returned tuple.
+    """
     by_name = dict(zip(names, row))
     x = float(by_name.get("x", 0.0))
     y = float(by_name.get("y", 0.0))
     z = float(by_name.get("z", 0.0))
+    # Normals are optional; AliceVision's dense cloud doesn't emit them.
+    has_normal = "nx" in by_name or "ny" in by_name or "nz" in by_name
+    if has_normal:
+        nx = float(by_name.get("nx", 0.0))
+        ny = float(by_name.get("ny", 0.0))
+        nz = float(by_name.get("nz", 1.0))
+        # Re-normalize defensively — some exporters write non-unit-length
+        # normals.
+        length = (nx * nx + ny * ny + nz * nz) ** 0.5
+        if length > 1e-6:
+            nx /= length; ny /= length; nz /= length
+        else:
+            nx = 0.0; ny = 0.0; nz = 1.0
+    else:
+        nx = 0.0; ny = 0.0; nz = 1.0
     r = by_name.get("red", by_name.get("r", 200.0))
     g = by_name.get("green", by_name.get("g", 200.0))
     b = by_name.get("blue", by_name.get("b", 200.0))
     a = by_name.get("alpha", by_name.get("a", 255.0))
-    # Normalise: if the source type is uchar (range 0..255) we still get
-    # a value in that range here; divide by 255 to land in [0, 1]. If it
-    # was already float (rare in PLY), the divide is harmless for sane
-    # inputs.
+    # Normalize: if the source type is uchar (range 0..255) we still get
+    # a value in that range here; divide by 255 to land in [0, 1].
     if r > 1.0 or g > 1.0 or b > 1.0 or a > 1.0:
         r /= 255.0; g /= 255.0; b /= 255.0; a /= 255.0
-    return (x, y, z, float(r), float(g), float(b), float(a))
+    return (x, y, z, nx, ny, nz, float(r), float(g), float(b), float(a))
 
 
 __all__ = ["PointCloudGeometry"]

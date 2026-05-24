@@ -30,12 +30,22 @@ Node {
     id: root
 
     property string sfmDataPath: ""
+    property string masksPath: ""        // folder containing per-view masks (PNG)
+    property bool showMasks: true
     property int maxCameras: 200
     property real frustumNear: 0.02     // scene units
     property real frustumFar: 0.15
     property real frustumFovY: 45.0
     property real frustumAspect: 1.5
     property color frustumColor: Qt.rgba(1.0, 0.7, 0.2, 1.0)
+    property color selectedFrustumColor: Qt.rgba(0.4, 0.9, 1.0, 1.0)
+    // Index of the currently-selected pose in _poses (-1 = none).
+    property int selectedIndex: -1
+    // Read-only convenience accessor for the selected pose (or null).
+    readonly property var selectedPose: selectedIndex >= 0 && selectedIndex < _poses.length
+                                        ? _poses[selectedIndex] : null
+
+    signal cameraSelected(int index, var pose)
 
     // -------- parsed pose list (filled by JS on path change) --------
     property var _poses: []
@@ -90,6 +100,14 @@ Node {
             if (!t || !t.center) continue
             var c = t.center
             var rot = t.rotation
+            // The view's image path: AliceVision stores it as `path`.
+            // Extract the stem so we can look up the matching mask
+            // file in masksPath (BiRefNet writes "<stem>_mask.png").
+            var imgPath = view.path || ""
+            var slash = Math.max(imgPath.lastIndexOf("/"), imgPath.lastIndexOf("\\"))
+            var stem = imgPath.substring(slash + 1)
+            var dot = stem.lastIndexOf(".")
+            if (dot > 0) stem = stem.substring(0, dot)
             poseList.push({
                 tx: parseFloat(c[0]),
                 ty: parseFloat(c[1]),
@@ -100,6 +118,8 @@ Node {
                 eul: rot && rot.length === 9
                      ? _rotMatToEuler(rot.map(parseFloat), /*transpose=*/true)
                      : Qt.vector3d(0, 0, 0),
+                stem: stem,
+                viewId: view.viewId || "",
             })
         }
         _poses = poseList
@@ -137,18 +157,85 @@ Node {
     }
 
     // -------- render one wireframe per pose --------
+    //
+    // Each frustum is `pickable: true`, so a View3D-level TapHandler in
+    // MetalScenePreview can ray-cast and resolve which frustum was hit.
+    // We tag the Model with an index property so the picker can map
+    // back to the pose list and emit `cameraSelected`.
     Repeater3D {
+        id: frustumRepeater
         model: root._poses
-        delegate: Model {
+        delegate: Node {
+            // Wrap the wireframe Model + the mask-overlay Quad in a Node
+            // so they share the camera pose transform. The Quad lives in
+            // camera-local coords, sized to the near-plane extents.
+            required property int index
             required property var modelData
             position: Qt.vector3d(modelData.tx, modelData.ty, modelData.tz)
             eulerRotation: modelData.eul
-            geometry: sharedFrustumGeo
-            materials: PrincipledMaterial {
-                lighting: PrincipledMaterial.NoLighting
-                baseColor: root.frustumColor
-                cullMode: PrincipledMaterial.NoCulling
+
+            Model {
+                geometry: sharedFrustumGeo
+                pickable: true
+                property int cameraIndex: index
+                property var frustumGroup: root
+                materials: PrincipledMaterial {
+                    lighting: PrincipledMaterial.NoLighting
+                    baseColor: index === root.selectedIndex
+                               ? root.selectedFrustumColor
+                               : root.frustumColor
+                    cullMode: PrincipledMaterial.NoCulling
+                }
+            }
+
+            // Per-view mask overlay on the near plane. Visible only when
+            // masksPath is set + showMasks is true + the per-view mask
+            // file exists. The unit-square `#Rectangle` mesh is scaled to
+            // match the near-plane extents (computed from the shared
+            // frustum's fov × aspect × near), and placed at z = -near
+            // (camera-local forward).
+            Model {
+                visible: root.showMasks
+                         && root.masksPath !== ""
+                         && modelData.stem !== ""
+                source: "#Rectangle"
+                // Near-plane half-extents: ay = tan(fovY/2); ax = ay × aspect.
+                property real ay: Math.tan(root.frustumFovY * Math.PI / 360.0)
+                property real ax: ay * root.frustumAspect
+                // `#Rectangle` is 100×100 in QtQuick3D's primitive set
+                // (a 1×1 unit rectangle centred at origin, scaled ×100).
+                // We pre-divide by 100 in the scale to get the desired
+                // half-extents-in-scene-units mapping.
+                scale: Qt.vector3d(2 * ax * root.frustumNear / 100,
+                                   2 * ay * root.frustumNear / 100,
+                                   1)
+                position: Qt.vector3d(0, 0, -root.frustumNear)
+                // Mask is grayscale; we blend it over the wireframe with
+                // a slight tint. opacityChannel uses the mask's RGB
+                // luminance as alpha so background pixels disappear.
+                materials: PrincipledMaterial {
+                    lighting: PrincipledMaterial.NoLighting
+                    cullMode: PrincipledMaterial.NoCulling
+                    baseColorMap: Texture {
+                        source: root.masksPath + "/" + modelData.stem + "_mask.png"
+                        // Don't filter — masks are binary-ish.
+                        magFilter: Texture.Nearest
+                        minFilter: Texture.Nearest
+                        flipV: false
+                    }
+                    opacity: 0.55
+                    alphaMode: PrincipledMaterial.Blend
+                }
             }
         }
+    }
+
+    function selectByIndex(idx) {
+        if (idx < 0 || idx >= _poses.length) {
+            selectedIndex = -1
+            return
+        }
+        selectedIndex = idx
+        cameraSelected(idx, _poses[idx])
     }
 }

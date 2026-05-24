@@ -54,6 +54,10 @@ DATASET = REPO_ROOT / "dataset_monstree" / _DATASET_NAME
 # Templates we EXPECT to be fully covered as long as the 12 standard
 # native binaries from Phase 11 are present in ./build/. If this list
 # shrinks (e.g. someone removes a binary), the coverage assertion fires.
+#
+# Note: "covered" here means "all binaries referenced by the template
+# are built". It does NOT mean E2E-runnable end-to-end — see
+# `E2E_TEMPLATES` below for that subset.
 EXPECTED_COVERED = {
     "photogrammetryDraft", "photogrammetryLegacy",
     # photogrammetryObject + photogrammetryObjectTurntable: SAM-purged
@@ -61,24 +65,87 @@ EXPECTED_COVERED = {
     # and verified end-to-end on Monstree mini3: each produced a
     # texturedMesh.obj + 3 BiRefNet masks (~400 ms/view, png format).
     "photogrammetryObject", "photogrammetryObjectTurntable",
+    # hdrFusion: 3 LdrToHdr* binaries built in Phase 14.2 (2026-05-23).
+    # Templates load + binaries launch with --help. NOT E2E-tested here
+    # because real HDR bracket detection requires the C++ pyalicevision
+    # bindings (Phase 13) — our shim's estimateGroups() returns []
+    # which makes the pipeline correctly conclude "no brackets".
+    "hdrFusion",
+    # panoramaHdr + panoramaFisheyeHdr: 8 panorama binaries + sfmTransform
+    # built in Phase 14.3 (2026-05-23). All templates load; binaries
+    # launch with -h. NOT E2E-tested here for the same reason as
+    # hdrFusion — bracket detection + panorama init both pass through
+    # pyalicevision shims that need Phase 13 to fully exercise.
+    "panoramaHdr", "panoramaFisheyeHdr",
+    # photometricStereo + multi-viewPhotometricStereo: 3 photometric
+    # binaries + sphereDetection (CoreML port via av_sphere_detection
+    # wrapping ai-models/yolov8n.mlpackage on ANE+GPU+CPU) shipped
+    # Phase 14.4a+b (2026-05-24). End-to-end inference smoke-tested
+    # against a real photo — model loaded, scored a detection,
+    # produced upstream-format JSON. NOT E2E-pipeline-tested here
+    # because the templates need calibration-sphere fixture images,
+    # not the photogrammetry dataset.
+    "photometricStereo", "multi-viewPhotometricStereo",
+    # Phase 14.5 (2026-05-24) — 21 new binaries (34 → 55) added in
+    # one sweep + 5 missing descriptors ported (SfM{BootStrapping,
+    # Expanding} casing fix + MoGe/MatchMasking/StarListing stubs).
+    # Six templates flipped to covered:
+    "colorCalibration",
+    "distortionCalibration",
+    "lidarMeshing",
+    "photogrammetry",                # modern SfM (sfmBoot/sfmExpand)
+    "photogrammetryObjectTwoSides",  # needed sfmMerge + convertSfMFormat
+    "rawImageConversion",            # needed imageProcessing
+    # Phase 14.6 (2026-05-24) — Alembic enabled in sfmDataIO sublib
+    # + 2 new binaries (aliceVision_exportAlembic, exportAnimatedCamera).
+    # Eight cameraTracking-family templates flipped to covered:
+    "cameraTracking",
+    "cameraTrackingLegacy",
+    "cameraTrackingWithoutCalibration",
+    "cameraTrackingWithoutCalibrationLegacy",
+    "nodalCameraTracking",
+    "nodalCameraTrackingWithoutCalibration",
+    "photogrammetryAndCameraTracking",
+    "photogrammetryAndCameraTrackingLegacy",
+    # Phase 14.7 (2026-05-24) — 3 Mac-port-native binaries written
+    # for 2026.1.0 features that upstream defers to external Python
+    # pipelines (no C++ source in upstream's open-source release).
+    # src/native_binaries/main_{starListing,matchMasking,moGe}.cpp:
+    #   - starListing: real algorithmic (star-topology image-pair list)
+    #   - matchMasking: honest pass-through (Roma pipeline virtualized)
+    #   - moGe: honest stub (constant-depth EXR placeholders; real
+    #     MoGe inference needs CoreML model conversion).
+    # The two templates these unlock load + binaries -h-test, but
+    # E2E behavior is limited by the stubs.
+    "cameraTrackingDepth",  # gated also by Roma virtualization for full E2E
+    "cameraTrackingRoma",   # Roma is virtualized; pipeline runs but no real matches
+}
+
+# Subset of EXPECTED_COVERED that the E2E test actually attempts to run
+# end-to-end on a real dataset. Templates listed in EXPECTED_COVERED
+# but NOT here have their binaries built + load cleanly, but full E2E
+# is gated on additional work (real pyalicevision bindings, dual-capture
+# fixture datasets, etc.).
+E2E_TEMPLATES = {
+    "photogrammetryDraft", "photogrammetryLegacy",
+    "photogrammetryObject", "photogrammetryObjectTurntable",
 }
 
 # Templates we know will fail because they require binaries we have NOT
 # built. If new binaries land (Phase 13-14), we move them out of here
 # into EXPECTED_COVERED.
-EXPECTED_UNCOVERED = {
-    "cameraTracking", "cameraTrackingDepth", "cameraTrackingLegacy",
-    "cameraTrackingRoma", "cameraTrackingWithoutCalibration",
-    "cameraTrackingWithoutCalibrationLegacy",
-    "colorCalibration", "distortionCalibration", "hdrFusion", "lidarMeshing",
-    "multi-viewPhotometricStereo",
-    "nodalCameraTracking", "nodalCameraTrackingWithoutCalibration",
-    "panoramaFisheyeHdr", "panoramaHdr",
-    "photogrammetry",  # modern SfM, needs Phase 14 binaries
-    "photogrammetryAndCameraTracking", "photogrammetryAndCameraTrackingLegacy",
-    "photogrammetryObjectTwoSides",  # SAM-purged but not E2E-verified yet
-    "photometricStereo", "rawImageConversion",
-}
+EXPECTED_UNCOVERED: set[str] = set()
+# 25 / 25 templates covered as of 2026-05-24 (Phase 14.7).
+# Remaining "honesty caveats":
+#   - cameraTrackingDepth: aliceVision_moGe is a STUB emitting constant-
+#     depth EXRs. Real MoGe inference needs the Microsoft MoGe model
+#     converted to CoreML (separate future phase).
+#   - cameraTrackingRoma: aliceVision_matchMasking is an honest pass-
+#     through (Roma matcher family is virtualized on macOS — no actual
+#     dense matching ML inference happens). aliceVision_starListing is
+#     a real algorithmic implementation.
+# Both templates LOAD + binaries -h-test, but E2E pipeline output is
+# placeholder. Documented in memory/phase14_7_2026_05_24.md.
 
 
 def _load_coverage() -> list[dict]:
@@ -244,10 +311,17 @@ def _count_vertices_ply(ply_path: Path) -> int:
 
 
 @requires_e2e
-@pytest.mark.parametrize("name", sorted(EXPECTED_COVERED))
+@pytest.mark.parametrize("name", sorted(E2E_TEMPLATES))
 def test_pipeline_runs_end_to_end(name: str, tmp_path: Path) -> None:
     """Run a covered pipeline on Monstree mini3 → expect a textured mesh
-    with a reasonable vertex count, no fatal errors in the log."""
+    with a reasonable vertex count, no fatal errors in the log.
+
+    Note: parametrized over E2E_TEMPLATES (the subset of EXPECTED_COVERED
+    that's known to run end-to-end on a single-side capture).
+    hdrFusion is EXPECTED_COVERED but not E2E here because real HDR
+    requires the C++ pyalicevision bindings — the shim stubs return
+    empty bracket lists, which is the correct behavior but not a useful
+    E2E test."""
     out_dir = tmp_path / name
     rc, log = _run_pipeline(name, out_dir)
 

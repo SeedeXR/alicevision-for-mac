@@ -67,6 +67,7 @@ option(AV_USE_HOMEBREW_DEPS      "Resolve dependencies via Homebrew prefix"   ON
 # (zero runtime cost, no symbol change). Turn ON to dump a per-function
 # summary table on process exit. See `src/depth_map_metal/src/adapter_profile.cpp`.
 option(AV_PROFILE_ADAPTER        "Profile cuda_* adapter forwarders (S43)"    OFF)
+option(AV_BUILD_PYALICEVISION    "Build C++ pyalicevision SWIG bindings (Phase 13)" ON)
 
 if(AV_USE_CUDA)
     message(FATAL_ERROR "CUDA is not available on macOS. Set -DAV_USE_CUDA=OFF.")
@@ -188,6 +189,41 @@ if(AV_BUILD_UPSTREAM_DEPTHMAP)
     set(ALICEVISION_HAVE_ONNX_GPU  0)
     if(OpenMP_CXX_FOUND)
         set(ALICEVISION_HAVE_OPENMP 1)
+    endif()
+
+    # Phase 14.6 — Alembic. Unlocks exportAlembic + exportAnimatedCamera
+    # binaries (and therefore 8 Meshroom templates that depend on Alembic
+    # cameras / point clouds). Homebrew ships an `AlembicConfig.cmake` at
+    # /opt/homebrew/lib/cmake/Alembic which provides the Alembic::Alembic
+    # imported target. Setting ALICEVISION_HAVE_ALEMBIC=1 BEFORE the
+    # add_subdirectory(upstream/src/aliceVision/sfmDataIO) call below
+    # causes the sublib's own `if (ALICEVISION_HAVE_ALEMBIC) ... endif()`
+    # blocks to fold AlembicExporter.cpp + AlembicImporter.cpp +
+    # ExternalAlembicImporter.cpp into aliceVision_sfmDataIO and to link
+    # Alembic::Alembic PRIVATE — no source-list patching required.
+    # The same flag is propagated into aliceVision/config.hpp by the
+    # configure_file() call a few lines below, so the
+    # `#if ALICEVISION_IS_DEFINED(ALICEVISION_HAVE_ALEMBIC)` gates in
+    # AlembicExporter.cpp evaluate true at compile time.
+    find_package(Alembic CONFIG REQUIRED)
+    if(TARGET Alembic::Alembic)
+        set(ALICEVISION_HAVE_ALEMBIC 1)
+    endif()
+
+    # Phase 13 — flip upstream's SWIG-binding switch when AV_BUILD_PYALICEVISION
+    # is on. Each sublib (sfmData/hdr/sfmDataIO/camera/etc.) has a
+    # `if(ALICEVISION_BUILD_SWIG_BINDING) alicevision_swig_add_library(...)`
+    # branch that we want to take. SWIG + Python3 must be found before
+    # we enter any of those sublib add_subdirectory() calls below.
+    if(AV_BUILD_PYALICEVISION)
+        find_package(SWIG REQUIRED)
+        include(UseSWIG)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module NumPy)
+        set(ALICEVISION_BUILD_SWIG_BINDING ON)
+        cmake_policy(SET CMP0078 NEW)
+        cmake_policy(SET CMP0086 NEW)
+    else()
+        set(ALICEVISION_BUILD_SWIG_BINDING OFF)
     endif()
 
     # ALICEVISION_HAVE_DEPTHMAP — Phase 9 gate (S31).
@@ -535,6 +571,10 @@ if(AV_BUILD_UPSTREAM_DEPTHMAP)
     # at /opt/homebrew/share/cmake/Modules/FindGeogram.cmake. Use the
     # MODULE mode (no CONFIG keyword).
     find_package(Geogram REQUIRED)
+    # OpenCV — required by photometricStereo + lightingEstimation sublibs
+    # (Phase 14.4). Sublibs reference ${OpenCV_LIBS} directly so the
+    # find_package must run BEFORE add_subdirectory(...) calls below.
+    find_package(OpenCV CONFIG REQUIRED)
 
     # Module add order (respect PUBLIC_LINKS chain):
     #   lensCorrectionProfile → (feature already done) used by cameraInit
@@ -560,7 +600,138 @@ if(AV_BUILD_UPSTREAM_DEPTHMAP)
     add_subdirectory(upstream/src/aliceVision/graph)
     add_subdirectory(upstream/src/aliceVision/track)
     add_subdirectory(upstream/src/aliceVision/dataio)
+
+    # Phase 14 — patch `relativePoses.hpp` to add `inline` to the two
+    # `tag_invoke` free functions for `ReconstructedPair`. Upstream
+    # defines them in the header WITHOUT `inline`, so every
+    # translation unit that includes it (transitively via
+    # `PairsScoring.hpp`) emits its own definition → duplicate-symbol
+    # link errors when `main_sfmBootstrapping.cpp` links against
+    # `libaliceVision_sfm.a` (which already contains the same
+    # definitions via `PairsScoring.cpp`). Following the
+    # `upstream-patched/` pattern already used for resection_kernel.cpp
+    # and l1.cpp, we materialize a patched copy + the include path
+    # `${CMAKE_BINARY_DIR}/upstream-patched/` (already on every binary's
+    # include list, see CMakeLists L638 + L759 etc.) picks it up first.
+    set(_RP_SRC     "${CMAKE_SOURCE_DIR}/upstream/src/aliceVision/sfm/pipeline/relativePoses.hpp")
+    set(_RP_PATCHED "${CMAKE_BINARY_DIR}/upstream-patched/aliceVision/sfm/pipeline/relativePoses.hpp")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/upstream-patched/aliceVision/sfm/pipeline")
+    file(READ "${_RP_SRC}" _rp_content)
+    string(REPLACE
+        "void tag_invoke(const boost::json::value_from_tag&"
+        "inline void tag_invoke(const boost::json::value_from_tag&"
+        _rp_content "${_rp_content}")
+    string(REPLACE
+        "ReconstructedPair tag_invoke(boost::json::value_to_tag<ReconstructedPair>"
+        "inline ReconstructedPair tag_invoke(boost::json::value_to_tag<ReconstructedPair>"
+        _rp_content "${_rp_content}")
+    file(WRITE "${_RP_PATCHED}" "${_rp_content}")
+
     add_subdirectory(upstream/src/aliceVision/sfm)
+
+    # Force the sfm sublib (which compiles PairsScoring.cpp etc.) to see
+    # the patched relativePoses.hpp BEFORE the unpatched original.
+    # `BEFORE PRIVATE` prepends the include path so the patched copy
+    # wins resolution. Without this, every TU in libaliceVision_sfm.a
+    # compiles tag_invoke as non-inline → duplicate symbols when a main
+    # binary that ALSO includes the header tries to link against the lib.
+    target_include_directories(aliceVision_sfm BEFORE PRIVATE
+        "${CMAKE_BINARY_DIR}/upstream-patched")
+    target_include_directories(aliceVision_sfm_bundle BEFORE PRIVATE
+        "${CMAKE_BINARY_DIR}/upstream-patched")
+
+    # Phase 14.2 — HDR sublib (unlocks LdrToHdr* binaries + the
+    # hdrFusion/panoramaHdr/panoramaFisheyeHdr templates' compute path).
+    # The sublib uses our existing alicevision_add_library shim;
+    # dependencies (system, image, sfmData, ceres) are all built.
+    add_subdirectory(upstream/src/aliceVision/hdr)
+
+    # Phase 14.3 — panorama sublib (unlocks panoramaWarping/Seams/
+    # Compositing/etc. binaries which drive panoramaHdr,
+    # panoramaFisheyeHdr templates). PUBLIC_LINKS numeric;
+    # PRIVATE_LINKS system + image + camera — all built.
+    add_subdirectory(upstream/src/aliceVision/panorama)
+
+    # Phase 14.4a — photometric stereo sublibs (unlocks 2 of 3
+    # photometricStereo binaries; sphereDetection deferred — it
+    # upstream-requires ONNX Runtime, we'll do a CoreML port in 14.4b).
+    # Both sublibs PUBLIC_LINKS ${OpenCV_LIBS} — find_package(OpenCV)
+    # ran above.
+    add_subdirectory(upstream/src/aliceVision/photometricStereo)
+    add_subdirectory(upstream/src/aliceVision/lightingEstimation)
+
+    # Phase 14.4b — CoreML sphereDetection sublib (av_sphere_detection).
+    # Drop-in replacement for upstream's ONNX Runtime-based
+    # aliceVision_sphereDetection. Provides BOTH
+    # av::sphere::CoreMLSphereDetector (wrapper) AND
+    # aliceVision::sphereDetection::* (upstream namespace, same API
+    # except Ort::Session swapped for CoreMLSphereDetector). Links
+    # CoreML + Foundation + CoreVideo frameworks. NO ONNX Runtime dep.
+    add_subdirectory(src/sphere_detection)
+
+    # Phase 14.8 — CoreML MoGe (monocular geometry) sublib (av_moge).
+    # Wraps the user's ai-models/moge2_504x672_t1728.mlpackage (DINOv2
+    # ViT-B/14). Used by aliceVision_moGe binary; replaces the Phase
+    # 14.7 honest stub with real per-view depth + normals from the
+    # neural network. Links CoreML + Foundation + OpenCV.
+    add_subdirectory(src/moge)
+
+    # Phase 14.9 — CoreML TinyRoMa dense-matcher sublib (av_roma).
+    # Wraps ai-models/tiny_roma_v1_480x640.mlpackage. Used by
+    # aliceVision_matchMasking, replacing the Phase 14.7 pass-through.
+    # CRITICAL: the wrapper loads with MLComputeUnitsCPUAndGPU — NOT
+    # `.all` — because ANE is a 4× regression for this model (see
+    # ai-models/README.md). Links CoreML + Foundation + OpenCV.
+    add_subdirectory(src/roma)
+
+    # Phase 14.5 — calibration / keyframe / imageProcessing sublibs.
+    # These are small, dep-clean sublibs that unlock a large number of
+    # remaining utility/pipeline binaries (checkerboard/distortion/
+    # colorChecker/keyframe/imageProcessing-exe). No ONNX/CUDA.
+    #   calibration     → image, system, dataio, Boost, Ceres
+    #   keyframe        → OpenCV (sequence-keyframe selection)
+    #   imageProcessing → numeric, image, sfmData, camera, lensCorrectionProfile, OpenCV
+    add_subdirectory(upstream/src/aliceVision/calibration)
+    add_subdirectory(upstream/src/aliceVision/keyframe)
+    add_subdirectory(upstream/src/aliceVision/imageProcessing)
+
+    # Phase 14.5 — patch `image/conversionOpenCV.hpp` to drop the
+    # `#if ALICEVISION_IS_DEFINED(ALICEVISION_HAVE_OPENCV)` guard.
+    # The two main_colorChecker*.cpp binaries depend on the inline
+    # `imageRGBAToCvMatBGR` / `cvMatBGRToImageRGBA` helpers in that
+    # header, but flipping ALICEVISION_HAVE_OPENCV=1 globally would
+    # also pull OpenCV-SIFT, OpenCV-feed, OpenCV-SVG paths into
+    # feature/dataio/matching sublibs — we don't want those. Patch
+    # just this one header so the helpers are unconditionally
+    # available; the cv:: types come from the explicit OpenCV_LIBS
+    # link on the colorChecker binaries.
+    set(_CVCONV_SRC     "${CMAKE_SOURCE_DIR}/upstream/src/aliceVision/image/conversionOpenCV.hpp")
+    set(_CVCONV_PATCHED "${CMAKE_BINARY_DIR}/upstream-patched/aliceVision/image/conversionOpenCV.hpp")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/upstream-patched/aliceVision/image")
+    file(READ "${_CVCONV_SRC}" _cvconv_content)
+    string(REPLACE
+        "#if ALICEVISION_IS_DEFINED(ALICEVISION_HAVE_OPENCV)"
+        "#if 1  // patched: always-on for colorChecker binaries"
+        _cvconv_content "${_cvconv_content}")
+    string(REPLACE
+        "#endif  // ALICEVISION_HAVE_OPENCV"
+        "#endif  // patched"
+        _cvconv_content "${_cvconv_content}")
+    file(WRITE "${_CVCONV_PATCHED}" "${_cvconv_content}")
+
+    # The upstream CMakeLists for keyframe + imageProcessing gate OpenCV
+    # linking behind `if (ALICEVISION_HAVE_OPENCV)` which we keep set to 0
+    # (because flipping it would also enable OpenCV-SIFT, OpenCV-feed,
+    # and OpenCV-SVG paths in feature/dataio/matching that we don't want
+    # in this port). But the sublib *sources* + headers reference
+    # cv::optflow / cv::ximgproc unconditionally — so attach OpenCV
+    # include dirs + libs to these specific targets only.
+    target_include_directories(aliceVision_keyframe PUBLIC ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(aliceVision_keyframe PUBLIC ${OpenCV_LIBS})
+    target_include_directories(aliceVision_imageProcessing PUBLIC ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(aliceVision_imageProcessing PUBLIC ${OpenCV_LIBS})
+    target_include_directories(aliceVision_calibration PUBLIC ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(aliceVision_calibration PUBLIC ${OpenCV_LIBS})
 
     # S41 — mesh / fuseCut / sfmMvsUtils for meshing+texturing pipeline
     # Link chain:
@@ -974,6 +1145,903 @@ if(AV_BUILD_UPSTREAM_DEPTHMAP)
         aliceVision_sfmDataIO
         Boost::program_options
     )
+
+    # ============================================================
+    # Phase 14.1 — additional pipeline binaries (2026-05-23)
+    # ============================================================
+    # 6 binaries that use only sublibs we already build. Adding them
+    # unlocks modern-SfM templates (sfmBootstrapping + sfmExpanding +
+    # relativePoseEstimating + sfmTriangulation + tracksBuilding) plus
+    # mesh decimation. Each block mirrors the canonical pattern
+    # established by aliceVision_meshing above.
+
+    # (13) sfmBootstrapping — initialize SfM from feature tracks.
+    add_executable(aliceVision_sfmBootstrapping
+        upstream/src/software/pipeline/main_sfmBootstrapping.cpp
+    )
+    target_include_directories(aliceVision_sfmBootstrapping PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+    )
+    target_compile_definitions(aliceVision_sfmBootstrapping PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_sfmBootstrapping PRIVATE
+        aliceVision_system
+        aliceVision_cmdline
+        aliceVision_sfm
+        aliceVision_sfmData
+        aliceVision_sfmDataIO
+        aliceVision_feature
+        aliceVision_track
+        aliceVision_dataio
+        # aliceVision_mesh transitively brings Geogram include paths,
+        # required because sfmData/MeshPointFetcher.hpp includes
+        # mesh/MeshIntersection.hpp which #include <geogram/mesh/mesh.h>.
+        aliceVision_mesh
+        Boost::program_options
+    )
+
+    # (14) sfmExpanding — incremental expansion (modern SfM core).
+    add_executable(aliceVision_sfmExpanding
+        upstream/src/software/pipeline/main_sfmExpanding.cpp
+    )
+    target_include_directories(aliceVision_sfmExpanding PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+    )
+    target_compile_definitions(aliceVision_sfmExpanding PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_sfmExpanding PRIVATE
+        aliceVision_system
+        aliceVision_cmdline
+        aliceVision_sfm
+        aliceVision_sfmData
+        aliceVision_sfmDataIO
+        aliceVision_track
+        # See sfmBootstrapping comment: sfmData/MeshPointFetcher.hpp
+        # transitively pulls geogram via aliceVision_mesh.
+        aliceVision_mesh
+        Boost::program_options
+    )
+
+    # (15) relativePoseEstimating — relative-pose pipeline step.
+    add_executable(aliceVision_relativePoseEstimating
+        upstream/src/software/pipeline/main_relativePoseEstimating.cpp
+    )
+    target_include_directories(aliceVision_relativePoseEstimating PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+    )
+    target_compile_definitions(aliceVision_relativePoseEstimating PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_relativePoseEstimating PRIVATE
+        aliceVision_system
+        aliceVision_cmdline
+        aliceVision_sfm
+        aliceVision_sfmData
+        aliceVision_sfmDataIO
+        aliceVision_track
+        aliceVision_feature
+        aliceVision_multiview
+        aliceVision_camera
+        aliceVision_geometry
+        aliceVision_robustEstimation
+        aliceVision_matchingImageCollection
+        Boost::program_options
+    )
+
+    # (16) sfmTriangulation — triangulate landmarks from tracks.
+    add_executable(aliceVision_sfmTriangulation
+        upstream/src/software/pipeline/main_sfmTriangulation.cpp
+    )
+    target_include_directories(aliceVision_sfmTriangulation PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+    )
+    target_compile_definitions(aliceVision_sfmTriangulation PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_sfmTriangulation PRIVATE
+        aliceVision_system
+        aliceVision_cmdline
+        aliceVision_sfm
+        aliceVision_sfmData
+        aliceVision_sfmDataIO
+        aliceVision_feature
+        aliceVision_track
+        Boost::program_options
+    )
+
+    # (17) tracksBuilding — build feature tracks across views.
+    add_executable(aliceVision_tracksBuilding
+        upstream/src/software/pipeline/main_tracksBuilding.cpp
+    )
+    target_include_directories(aliceVision_tracksBuilding PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+    )
+    target_compile_definitions(aliceVision_tracksBuilding PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_tracksBuilding PRIVATE
+        aliceVision_system
+        aliceVision_cmdline
+        aliceVision_sfm
+        aliceVision_sfmData
+        aliceVision_sfmDataIO
+        aliceVision_feature
+        aliceVision_track
+        Boost::program_options
+    )
+
+    # ============================================================
+    # Phase 14.2 — HDR pipeline binaries (LdrToHdr*)
+    # ============================================================
+    # Three binaries that drive the hdrFusion / panoramaHdr /
+    # panoramaFisheyeHdr templates. Depends on alicevision_hdr sublib
+    # (added above).
+
+    # (19) LdrToHdrSampling — pick HDR-fusion-ready brackets per view.
+    add_executable(aliceVision_LdrToHdrSampling
+        upstream/src/software/pipeline/main_LdrToHdrSampling.cpp
+    )
+    target_include_directories(aliceVision_LdrToHdrSampling PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+    )
+    target_compile_definitions(aliceVision_LdrToHdrSampling PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_LdrToHdrSampling PRIVATE
+        aliceVision_system
+        aliceVision_cmdline
+        aliceVision_image
+        aliceVision_sfmData
+        aliceVision_sfmDataIO
+        aliceVision_hdr
+        Boost::program_options
+    )
+
+    # (20) LdrToHdrCalibration — calibrate camera response from samples.
+    add_executable(aliceVision_LdrToHdrCalibration
+        upstream/src/software/pipeline/main_LdrToHdrCalibration.cpp
+    )
+    target_include_directories(aliceVision_LdrToHdrCalibration PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+    )
+    target_compile_definitions(aliceVision_LdrToHdrCalibration PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_LdrToHdrCalibration PRIVATE
+        aliceVision_system
+        aliceVision_cmdline
+        aliceVision_image
+        aliceVision_sfmData
+        aliceVision_sfmDataIO
+        aliceVision_hdr
+        Boost::program_options
+    )
+
+    # (21) LdrToHdrMerge — merge bracket groups into HDR EXRs.
+    add_executable(aliceVision_LdrToHdrMerge
+        upstream/src/software/pipeline/main_LdrToHdrMerge.cpp
+    )
+    target_include_directories(aliceVision_LdrToHdrMerge PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+    )
+    target_compile_definitions(aliceVision_LdrToHdrMerge PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_LdrToHdrMerge PRIVATE
+        aliceVision_system
+        aliceVision_cmdline
+        aliceVision_image
+        aliceVision_sfmData
+        aliceVision_sfmDataIO
+        aliceVision_hdr
+        Boost::program_options
+    )
+
+    # ============================================================
+    # Phase 14.3 — panorama pipeline binaries (10 binaries)
+    # ============================================================
+    # Use a macro to cut boilerplate. Each binary needs the standard
+    # set of includes + the AV_EIGEN_DEFINITIONS compile defs; only
+    # link libraries vary.
+    macro(av_add_pipeline_binary _name)
+        add_executable(${_name}
+            upstream/src/software/pipeline/main_${_name}.cpp
+        )
+        # The binary's main_X.cpp file lives at
+        # upstream/src/software/pipeline/main_<NameWithoutPrefix>.cpp where
+        # _name has the `aliceVision_` prefix. Compute the upstream stem.
+        # (Handled by passing a relative-from-pipeline arg; see callers.)
+    endmacro()
+
+    # Panorama binaries — link list per file follows the include pattern:
+    #   numeric+system+cmdline+image+sfmData+sfmDataIO baseline
+    #   + camera (panoramaInit)
+    #   + hdr (panoramaPrepareImages)
+    #   + panorama (panoramaWarping/Seams/Compositing)
+    #   + sfm+feature (panoramaEstimation)
+    #   + sfm+track+dataio (panoramaRefining)
+    #   + stl (panoramaPostProcessing)
+
+    add_executable(aliceVision_panoramaInit upstream/src/software/pipeline/main_panoramaInit.cpp)
+    target_include_directories(aliceVision_panoramaInit PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_panoramaInit PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_panoramaInit PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_camera aliceVision_sfmData aliceVision_sfmDataIO
+        Boost::program_options)
+
+    add_executable(aliceVision_panoramaPrepareImages upstream/src/software/pipeline/main_panoramaPrepareImages.cpp)
+    target_include_directories(aliceVision_panoramaPrepareImages PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_panoramaPrepareImages PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_panoramaPrepareImages PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO aliceVision_hdr
+        Boost::program_options)
+
+    add_executable(aliceVision_panoramaWarping upstream/src/software/pipeline/main_panoramaWarping.cpp)
+    target_include_directories(aliceVision_panoramaWarping PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_panoramaWarping PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_panoramaWarping PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO aliceVision_panorama
+        Boost::program_options)
+
+    add_executable(aliceVision_panoramaEstimation upstream/src/software/pipeline/main_panoramaEstimation.cpp)
+    target_include_directories(aliceVision_panoramaEstimation PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_panoramaEstimation PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_panoramaEstimation PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_sfm
+        aliceVision_sfmData aliceVision_sfmDataIO aliceVision_feature
+        aliceVision_mesh    # transitive geogram, like sfmBootstrapping
+        Boost::program_options)
+
+    add_executable(aliceVision_panoramaCompositing upstream/src/software/pipeline/main_panoramaCompositing.cpp)
+    target_include_directories(aliceVision_panoramaCompositing PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_panoramaCompositing PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_panoramaCompositing PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO aliceVision_panorama
+        Boost::program_options)
+
+    add_executable(aliceVision_panoramaMerging upstream/src/software/pipeline/main_panoramaMerging.cpp)
+    target_include_directories(aliceVision_panoramaMerging PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_panoramaMerging PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_panoramaMerging PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO
+        Boost::program_options)
+
+    add_executable(aliceVision_panoramaSeams upstream/src/software/pipeline/main_panoramaSeams.cpp)
+    target_include_directories(aliceVision_panoramaSeams PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_panoramaSeams PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_panoramaSeams PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO aliceVision_panorama
+        Boost::program_options)
+
+    add_executable(aliceVision_panoramaPostProcessing upstream/src/software/pipeline/main_panoramaPostProcessing.cpp)
+    target_include_directories(aliceVision_panoramaPostProcessing PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_panoramaPostProcessing PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_panoramaPostProcessing PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_stl
+        Boost::program_options)
+
+    # Bonus: aliceVision_sfmTransform (utils/) — unlocks panoramaHdr +
+    # panoramaFisheyeHdr templates (only remaining dep after panorama
+    # sublib). Also needed by photogrammetry + cameraTracking variants.
+    add_executable(aliceVision_sfmTransform upstream/src/software/utils/main_sfmTransform.cpp)
+    target_include_directories(aliceVision_sfmTransform PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_sfmTransform PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_sfmTransform PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfm aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_track aliceVision_geometry aliceVision_mesh
+        Boost::program_options)
+
+    # ============================================================
+    # Phase 14.4a — photometric stereo binaries (2 of 3)
+    # ============================================================
+    # aliceVision_sphereDetection deferred to 14.4b (CoreML port to
+    # replace the upstream ONNX Runtime dep). These two binaries are
+    # pure Eigen/OpenCV math and ship now.
+
+    add_executable(aliceVision_lightingCalibration
+        upstream/src/software/pipeline/main_lightingCalibration.cpp)
+    target_include_directories(aliceVision_lightingCalibration PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_lightingCalibration PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_lightingCalibration PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_lightingEstimation
+        Boost::program_options)
+
+    # Binary target name collides with the photometricStereo static lib
+    # (same convention as upstream which gets around it via separate
+    # subdir scopes). We disambiguate the CMake target with `_bin`
+    # suffix; OUTPUT_NAME keeps the shipped binary filename what
+    # Meshroom's PhotometricStereo descriptor expects.
+    add_executable(aliceVision_photometricStereo_bin
+        upstream/src/software/pipeline/main_photometricStereo.cpp)
+    set_target_properties(aliceVision_photometricStereo_bin PROPERTIES
+        OUTPUT_NAME aliceVision_photometricStereo)
+    target_include_directories(aliceVision_photometricStereo_bin PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_photometricStereo_bin PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_photometricStereo_bin PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_photometricStereo
+        Boost::program_options)
+
+    # ============================================================
+    # Phase 14.4b — aliceVision_sphereDetection (CoreML)
+    # ============================================================
+    # Replaces upstream's ONNX Runtime-based binary. Uses the user's
+    # converted YOLOv8 .mlpackage (Vision-style export with NMS baked
+    # in). Sources live in src/sphere_detection/aliceVision_shim/ so
+    # the existing upstream-patched/ runtime-rewrite pattern isn't
+    # needed — the changes were too large for a string-replace patch.
+
+    add_executable(aliceVision_sphereDetection
+        src/sphere_detection/aliceVision_shim/main_sphereDetection.cpp)
+    # The shim's aliceVision/sphereDetection/sphereDetection.hpp must
+    # SHADOW the upstream header (which #includes onnxruntime). Force
+    # the shim include dir before upstream/src via `BEFORE PRIVATE`.
+    target_include_directories(aliceVision_sphereDetection BEFORE PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/sphere_detection/aliceVision_shim)
+    target_include_directories(aliceVision_sphereDetection PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_sphereDetection PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_sphereDetection PRIVATE
+        av_sphere_detection            # provides aliceVision::sphereDetection::*
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfmData aliceVision_sfmDataIO
+        Boost::program_options)
+
+    # Bonus: aliceVision_sfmTransfer (utils/) — needed by
+    # multi-viewPhotometricStereo template (only remaining dep besides
+    # sphereDetection-CoreML). Same lib set as sfmTransform.
+    add_executable(aliceVision_sfmTransfer upstream/src/software/utils/main_sfmTransfer.cpp)
+    target_include_directories(aliceVision_sfmTransfer PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_sfmTransfer PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_sfmTransfer PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfm aliceVision_sfmData aliceVision_sfmDataIO
+        Boost::program_options)
+
+    # (18) meshDecimate — OpenMesh-based mesh simplification.
+    add_executable(aliceVision_meshDecimate
+        upstream/src/software/pipeline/main_meshDecimate.cpp
+    )
+    target_include_directories(aliceVision_meshDecimate PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+    )
+    target_compile_definitions(aliceVision_meshDecimate PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_meshDecimate PRIVATE
+        aliceVision_system
+        aliceVision_cmdline
+        aliceVision_mvsUtils
+        OpenMeshCore
+        OpenMeshTools
+        Boost::program_options
+    )
+
+    # ================================================================
+    # Phase 14.5 — bulk utility / pipeline / convert / export binaries
+    # ================================================================
+    # 21 additional binaries on top of the existing 34. exportAlembic +
+    # exportAnimatedCamera were originally skipped here (need Alembic);
+    # they are now enabled in Phase 14.6 further down once Alembic is
+    # turned on globally.
+    # All binaries below follow the established pattern:
+    #   shim/aliceVision-includes -> upstream-patched -> upstream-generated -> upstream/src
+    #   AV_EIGEN_DEFINITIONS so Eigen alignment matches the static libs.
+    # Link deps are taken from each binary's upstream
+    # software/{utils,pipeline,convert,export}/CMakeLists.txt LINKS line
+    # plus its actual #include <aliceVision/...> set.
+
+    # -- utils ----------------------------------------------------------
+
+    # applyCalibration — propagate calibrated intrinsics + distortion
+    # back into an SfMData. Pure sfmData/sfmDataIO/dataio/camera math.
+    add_executable(aliceVision_applyCalibration
+        upstream/src/software/utils/main_applyCalibration.cpp)
+    target_include_directories(aliceVision_applyCalibration PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_applyCalibration PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_applyCalibration PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_dataio aliceVision_camera
+        Boost::program_options)
+
+    # colorCheckerCorrection — applies a Macbeth-chart CCM to images.
+    # Needs OpenCV mcc contrib module (cv::mcc::CCM) at link time +
+    # the patched conversionOpenCV.hpp on the include path (BEFORE so
+    # it shadows the unpatched upstream copy in upstream/src/).
+    add_executable(aliceVision_colorCheckerCorrection
+        upstream/src/software/utils/main_colorCheckerCorrection.cpp)
+    target_include_directories(aliceVision_colorCheckerCorrection BEFORE PRIVATE
+        ${CMAKE_BINARY_DIR}/upstream-patched)
+    target_include_directories(aliceVision_colorCheckerCorrection PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+        ${OpenCV_INCLUDE_DIRS})
+    target_compile_definitions(aliceVision_colorCheckerCorrection PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_colorCheckerCorrection PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO
+        ${OpenCV_LIBS}
+        Boost::program_options)
+
+    # colorCheckerDetection — detects Macbeth charts in input views
+    # (cv::mcc::CCheckerDetector). Same patched-header treatment as
+    # colorCheckerCorrection.
+    add_executable(aliceVision_colorCheckerDetection
+        upstream/src/software/utils/main_colorCheckerDetection.cpp)
+    target_include_directories(aliceVision_colorCheckerDetection BEFORE PRIVATE
+        ${CMAKE_BINARY_DIR}/upstream-patched)
+    target_include_directories(aliceVision_colorCheckerDetection PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src
+        ${OpenCV_INCLUDE_DIRS})
+    target_compile_definitions(aliceVision_colorCheckerDetection PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_colorCheckerDetection PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO
+        ${OpenCV_LIBS}
+        Boost::program_options)
+
+    # depthmapTracksInjecting — injects tracks back into depthmap pass.
+    add_executable(aliceVision_depthmapTracksInjecting
+        upstream/src/software/utils/main_depthmapTracksInjecting.cpp)
+    target_include_directories(aliceVision_depthmapTracksInjecting PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_depthmapTracksInjecting PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_depthmapTracksInjecting PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO aliceVision_track
+        Boost::program_options)
+
+    # exportImages — re-export views (with optional undistortion).
+    add_executable(aliceVision_exportImages
+        upstream/src/software/utils/main_exportImages.cpp)
+    target_include_directories(aliceVision_exportImages PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_exportImages PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_exportImages PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO
+        Boost::program_options)
+
+    # imageProcessing — denoise / sharpen / lcp / resize utility. Binary
+    # target name collides with the static lib of the same name — use
+    # the same _bin suffix trick as photometricStereo.
+    add_executable(aliceVision_imageProcessing_bin
+        upstream/src/software/utils/main_imageProcessing.cpp)
+    set_target_properties(aliceVision_imageProcessing_bin PROPERTIES
+        OUTPUT_NAME aliceVision_imageProcessing)
+    target_include_directories(aliceVision_imageProcessing_bin PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_imageProcessing_bin PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_imageProcessing_bin PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sensorDB aliceVision_feature aliceVision_sfm
+        aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_lensCorrectionProfile
+        aliceVision_imageProcessing
+        ${OpenCV_LIBS}
+        Boost::program_options)
+
+    # intrinsicsTransforming — transform intrinsics + track keypoints.
+    add_executable(aliceVision_intrinsicsTransforming
+        upstream/src/software/utils/main_intrinsicsTransforming.cpp)
+    target_include_directories(aliceVision_intrinsicsTransforming PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_intrinsicsTransforming PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_intrinsicsTransforming PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfmData aliceVision_sfmDataIO aliceVision_track
+        Boost::program_options)
+
+    # keyframeSelection — picks best frames from a video sequence.
+    # Depends on the new aliceVision_keyframe sublib (OpenCV-backed).
+    add_executable(aliceVision_keyframeSelection
+        upstream/src/software/utils/main_keyframeSelection.cpp)
+    target_include_directories(aliceVision_keyframeSelection PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_keyframeSelection PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_keyframeSelection PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_keyframe
+        Boost::program_options)
+
+    # sfmColorizing — colorize SfM landmarks from input views.
+    add_executable(aliceVision_sfmColorizing
+        upstream/src/software/utils/main_sfmColorizing.cpp)
+    target_include_directories(aliceVision_sfmColorizing PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_sfmColorizing PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_sfmColorizing PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfm aliceVision_sfmData aliceVision_sfmDataIO
+        Boost::program_options)
+
+    # sfmMerge — merge two SfMData files (resolving id collisions).
+    add_executable(aliceVision_sfmMerge
+        upstream/src/software/utils/main_sfmMerge.cpp)
+    target_include_directories(aliceVision_sfmMerge PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_sfmMerge PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_sfmMerge PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfm aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_matching
+        Boost::program_options)
+
+    # tracksMerging — main_*.cpp #includes TracksMerger.cpp inline, so
+    # the binary TU defines the same symbols as the static lib. Clang's
+    # archive-extraction skips redundant objects, so this links cleanly
+    # without us needing to drop TracksMerger.cpp from aliceVision_track.
+    add_executable(aliceVision_tracksMerging
+        upstream/src/software/utils/main_tracksMerging.cpp)
+    target_include_directories(aliceVision_tracksMerging PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_tracksMerging PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_tracksMerging PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_track
+        Boost::program_options)
+
+    # -- convert --------------------------------------------------------
+
+    # convertDistortion — convert between distortion model
+    # parameterizations (uses calibration::DistortionEstimationPoint).
+    add_executable(aliceVision_convertDistortion
+        upstream/src/software/convert/main_convertDistortion.cpp)
+    target_include_directories(aliceVision_convertDistortion PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_convertDistortion PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_convertDistortion PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_feature
+        aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_calibration
+        Boost::program_options)
+
+    # convertSfMFormat — JSON <-> internal SfMData converter.
+    add_executable(aliceVision_convertSfMFormat
+        upstream/src/software/convert/main_convertSfMFormat.cpp)
+    target_include_directories(aliceVision_convertSfMFormat PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_convertSfMFormat PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_convertSfMFormat PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_feature
+        aliceVision_sfmData aliceVision_sfmDataIO
+        Boost::program_options)
+
+    # -- export ---------------------------------------------------------
+
+    # exportDistortion — render the per-intrinsic distortion field.
+    add_executable(aliceVision_exportDistortion
+        upstream/src/software/export/main_exportDistortion.cpp)
+    target_include_directories(aliceVision_exportDistortion PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_exportDistortion PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_exportDistortion PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_camera
+        aliceVision_sfmData aliceVision_sfmDataIO aliceVision_image
+        Boost::program_options)
+
+    # -- pipeline -------------------------------------------------------
+
+    # checkerboardDetection — find chessboard corners in calibration
+    # views. Needs the new aliceVision_calibration sublib.
+    add_executable(aliceVision_checkerboardDetection
+        upstream/src/software/pipeline/main_checkerboardDetection.cpp)
+    target_include_directories(aliceVision_checkerboardDetection PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_checkerboardDetection PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_checkerboardDetection PRIVATE
+        aliceVision_dataio aliceVision_image aliceVision_calibration
+        aliceVision_system aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_cmdline
+        Boost::program_options)
+
+    # distortionCalibration — Ceres-based distortion refinement from
+    # checkerboard detections.
+    add_executable(aliceVision_distortionCalibration
+        upstream/src/software/pipeline/main_distortionCalibration.cpp)
+    target_include_directories(aliceVision_distortionCalibration PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_distortionCalibration PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_distortionCalibration PRIVATE
+        aliceVision_dataio aliceVision_image aliceVision_calibration
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfmData aliceVision_sfmDataIO aliceVision_camera
+        Boost::program_options)
+
+    # geometricFilterEstimating — fundamental-matrix-based pairwise
+    # match filtering (essentially a standalone version of the geometric
+    # filter step inside featureMatching).
+    add_executable(aliceVision_geometricFilterEstimating
+        upstream/src/software/pipeline/main_geometricFilterEstimating.cpp)
+    target_include_directories(aliceVision_geometricFilterEstimating PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_geometricFilterEstimating PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_geometricFilterEstimating PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_feature
+        aliceVision_multiview aliceVision_matchingImageCollection
+        aliceVision_sfm aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_matching aliceVision_robustEstimation
+        Boost::program_options)
+
+    # nodalSfM — pure-rotation SfM (for nodal-pan panoramas).
+    add_executable(aliceVision_nodalSfM
+        upstream/src/software/pipeline/main_nodalSfM.cpp)
+    target_include_directories(aliceVision_nodalSfM PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_nodalSfM PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_nodalSfM PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_feature aliceVision_sfm
+        aliceVision_sfmData aliceVision_sfmDataIO aliceVision_track
+        aliceVision_geometry aliceVision_multiview aliceVision_robustEstimation
+        Boost::program_options)
+
+    # lidarMeshing — Delaunay tetrahedralization on LiDAR scans, then
+    # graph-cut surface extraction. Uses fuseCut::InputSet + Mesher.
+    add_executable(aliceVision_lidarMeshing
+        upstream/src/software/pipeline/main_lidarMeshing.cpp)
+    target_include_directories(aliceVision_lidarMeshing PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_lidarMeshing PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_lidarMeshing PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_mvsData aliceVision_mvsUtils
+        aliceVision_mesh aliceVision_fuseCut
+        aliceVision_sfmData aliceVision_sfmDataIO
+        Boost::program_options)
+
+    # lidarMerging — merge per-scan meshes by Delaunay tetrahedra
+    # intersection.
+    add_executable(aliceVision_lidarMerging
+        upstream/src/software/pipeline/main_lidarMerging.cpp)
+    target_include_directories(aliceVision_lidarMerging PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_lidarMerging PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_lidarMerging PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_mvsData aliceVision_mvsUtils
+        aliceVision_mesh aliceVision_fuseCut
+        aliceVision_geometry aliceVision_stl
+        Boost::program_options)
+
+    # lidarDecimating — OpenMesh-based simplification for the merged
+    # LiDAR mesh.
+    add_executable(aliceVision_lidarDecimating
+        upstream/src/software/pipeline/main_lidarDecimating.cpp)
+    target_include_directories(aliceVision_lidarDecimating PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_lidarDecimating PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_lidarDecimating PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_mvsData aliceVision_mvsUtils
+        aliceVision_mesh aliceVision_fuseCut
+        OpenMeshCore OpenMeshTools
+        Boost::program_options)
+
+    # ================================================================
+    # Phase 14.6 — Alembic export binaries
+    # ================================================================
+    # These two binaries unlock 8 Meshroom templates that need Alembic
+    # camera / point cloud export (exportAlembic blocks 6 templates,
+    # exportAnimatedCamera blocks 3 — with one overlap). Both call
+    # sfmDataIO::AlembicExporter, whose .cpp is gated by
+    # ALICEVISION_HAVE_ALEMBIC in upstream/src/aliceVision/sfmDataIO/
+    # CMakeLists.txt. Setting the flag earlier in this file (search
+    # "Phase 14.6 — Alembic") folds the Alembic TUs into the existing
+    # aliceVision_sfmDataIO static lib and links Alembic::Alembic
+    # PRIVATE to it, so the binaries below only need to link
+    # aliceVision_sfmDataIO + the usual sfmData / system / cmdline set.
+    # Link list matches upstream's software/export/CMakeLists.txt.
+
+    add_executable(aliceVision_exportAlembic
+        upstream/src/software/export/main_exportAlembic.cpp)
+    target_include_directories(aliceVision_exportAlembic PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_exportAlembic PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_exportAlembic PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfmData aliceVision_sfmDataIO
+        Boost::program_options Boost::timer)
+
+    add_executable(aliceVision_exportAnimatedCamera
+        upstream/src/software/export/main_exportAnimatedCamera.cpp)
+    target_include_directories(aliceVision_exportAnimatedCamera PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_exportAnimatedCamera PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_exportAnimatedCamera PRIVATE
+        aliceVision_system aliceVision_cmdline aliceVision_image
+        aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_camera
+        Boost::program_options Boost::timer)
+
+    # ================================================================
+    # Phase 14.7 — Mac-port native binaries for 2026.1.0 features that
+    # upstream defers to external Python pipelines. We ship our own
+    # native C++ implementations / honest stubs to round out coverage
+    # for the cameraTrackingRoma and cameraTrackingDepth templates.
+    # ================================================================
+    # Source layout: src/native_binaries/ (NOT under upstream/, because
+    # these are OUR code with no upstream provenance). The descriptors
+    # live at meshroom-mac/nodes/aliceVision/{StarListing,
+    # MatchMasking, MoGe}.py and were authored as loadable shims
+    # ahead of these binaries landing — Phase 14.7 closes the loop.
+    #
+    # All three binaries reuse only existing static libs from this
+    # build tree (no new sublibs / no new third-party deps):
+    #   * starListing    : sfmData + sfmDataIO + cmdline + system
+    #   * matchMasking   : sfmData + sfmDataIO + cmdline + system
+    #   * moGe           : + image (EXR placeholder writing)
+    add_executable(aliceVision_starListing
+        src/native_binaries/main_starListing.cpp)
+    target_include_directories(aliceVision_starListing PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_starListing PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_starListing PRIVATE
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfmData aliceVision_sfmDataIO
+        Boost::program_options)
+
+    # Phase 14.9 — REAL TinyRoMa-backed aliceVision_matchMasking
+    # (replaces the Phase 14.7 honest pass-through). Source moved from
+    # src/native_binaries/ to src/roma/aliceVision_shim/ to mirror the
+    # sphere_detection / moge layouts. Links av_roma for the
+    # CoreMLRomaMatcher wrapper.
+    add_executable(aliceVision_matchMasking
+        src/roma/aliceVision_shim/main_matchMasking.cpp)
+    target_include_directories(aliceVision_matchMasking PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_matchMasking PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_matchMasking PRIVATE
+        av_roma                       # provides av::roma::CoreMLRomaMatcher
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_image
+        Boost::program_options)
+
+    # Phase 14.8 — REAL CoreML-backed aliceVision_moGe (replaces the
+    # Phase 14.7 honest stub). Source moved from src/native_binaries/
+    # to src/moge/aliceVision_shim/ to mirror the sphere_detection
+    # layout. Links av_moge for the CoreMLMoGeRunner wrapper.
+    add_executable(aliceVision_moGe
+        src/moge/aliceVision_shim/main_moGe.cpp)
+    target_include_directories(aliceVision_moGe PRIVATE
+        ${CMAKE_SOURCE_DIR}/cmake/shims/aliceVision-includes
+        ${CMAKE_BINARY_DIR}/upstream-patched
+        ${CMAKE_BINARY_DIR}/upstream-generated
+        ${CMAKE_SOURCE_DIR}/upstream/src)
+    target_compile_definitions(aliceVision_moGe PRIVATE ${AV_EIGEN_DEFINITIONS})
+    target_link_libraries(aliceVision_moGe PRIVATE
+        av_moge                       # provides av::moge::CoreMLMoGeRunner
+        aliceVision_system aliceVision_cmdline
+        aliceVision_sfmData aliceVision_sfmDataIO
+        aliceVision_image
+        Boost::program_options)
 
     # ----------------------------------------------------------------
     # Phase 12 — Install rules (Homebrew packaging)

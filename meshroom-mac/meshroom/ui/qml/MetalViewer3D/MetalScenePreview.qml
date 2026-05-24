@@ -66,6 +66,26 @@ Item {
     implicitHeight: parent ? parent.height : 150
 
     signal sceneRefreshed
+    signal cameraSelected(int index, var pose)
+
+    // Smoothly fly the orbit camera so the user sees from approximately
+    // the picked viewpoint's position. We don't replicate the full
+    // SfM camera (intrinsics + extrinsics) into the orbit camera — we
+    // just place the orbit at the SfM camera centre + point it at the
+    // scene origin so users can use it as a "fly to here" shortcut.
+    function flyToPose(pose) {
+        if (!pose) return
+        orbitCamera.position = Qt.vector3d(pose.tx, pose.ty, pose.tz)
+        // Recenter the look-at on the scene's bbox centre if we can
+        // figure that out, else (0,0,0).
+        var target = Qt.vector3d(0, 0, 0)
+        if (modelLoader && modelLoader.bounds) {
+            var bMin = modelLoader.bounds.minimum
+            var bMax = modelLoader.bounds.maximum
+            target = Qt.vector3d((bMin.x+bMax.x)*0.5, (bMin.y+bMax.y)*0.5, (bMin.z+bMax.z)*0.5)
+        }
+        orbitCamera.lookAt(target)
+    }
 
     // -------- Python-side manifest parser --------
     ScenePreviewLoader {
@@ -202,6 +222,35 @@ Item {
                 id: frustumGroup
                 visible: root.loaded
                 sfmDataPath: root.camerasFile !== "" ? root.camerasFile : previewLoader.camerasPath
+                // Forward the masks symlink so each frustum can show its
+                // BiRefNet mask as a textured quad on the near plane.
+                masksPath: previewLoader.masksPath
+                onCameraSelected: function(idx, pose) {
+                    root.cameraSelected(idx, pose)
+                    flyToPose(pose)
+                }
+            }
+        }
+
+        // -------- camera picking --------
+        //
+        // QtQuick3D's View3D.pick(x, y) does GPU-side raycasting against
+        // every Model with `pickable: true`. The CameraFrustumGroup's
+        // frustums set that flag + tag themselves with cameraIndex, so
+        // a click here resolves directly to the picked frustum.
+        TapHandler {
+            onTapped: function(eventPoint) {
+                var pos = eventPoint.position
+                var pick = view.pick(pos.x, pos.y)
+                if (!pick || !pick.objectHit) return
+                var hit = pick.objectHit
+                // Walk up the parent chain looking for our cameraIndex
+                // tag (the picked Model sets it). Defensive against
+                // Repeater3D wrapping the delegate in an extra Node.
+                while (hit && hit.cameraIndex === undefined) hit = hit.parent
+                if (hit && hit.frustumGroup) {
+                    hit.frustumGroup.selectByIndex(hit.cameraIndex)
+                }
             }
         }
 

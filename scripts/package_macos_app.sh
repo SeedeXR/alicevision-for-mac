@@ -87,6 +87,120 @@ if [ -d "$ROOT/build/alicevision_root/share" ]; then
 fi
 
 # -------------------------------------------------------------------- #
+# 3b. Bundle Homebrew dylibs (the dylibbundler step)
+# -------------------------------------------------------------------- #
+# Walks every aliceVision_* binary + recursively every copied dylib,
+# rewriting `/opt/homebrew/...` references to
+# `@executable_path/../lib/<name>`. After this step the .app
+# is self-contained: it runs on any macOS Apple Silicon machine even
+# without Homebrew installed.
+#
+# This is a self-contained mini-dylibbundler in bash so we don't add a
+# `brew install dylibbundler` dependency to the build process.
+
+echo "[3b] Bundling Homebrew dylibs"
+
+LIB_DIR="$APP/Contents/Resources/lib"
+mkdir -p "$LIB_DIR"
+
+# Track already-processed dylib basenames so we don't loop on circular
+# inter-dylib references (e.g. boost_graph → boost_iostreams → boost_*).
+PROCESSED_LIBS=()
+
+_is_processed() {
+    local name="$1"
+    # The `${arr[@]+"${arr[@]}"}` idiom expands to empty (not "unbound")
+    # when the array has zero elements — required under `set -u`.
+    for p in ${PROCESSED_LIBS[@]+"${PROCESSED_LIBS[@]}"}; do
+        [ "$p" = "$name" ] && return 0
+    done
+    return 1
+}
+
+# Extract Homebrew + non-system dylib references from a Mach-O. We keep
+# /usr/lib/* and /System/* (those are guaranteed on every Mac) and bundle
+# everything else. Every step is `|| true` so a grep-no-match (= exit 1)
+# under `set -e` doesn't kill the whole pipeline.
+_external_deps() {
+    local target="$1"
+    local result
+    result="$(otool -L "$target" 2>/dev/null \
+        | tail -n +2 \
+        | awk '{print $1}' \
+        | { grep -vE '^(/usr/lib/|/System/|@executable_path|@rpath|@loader_path)' || true; } \
+        | { grep -v "^$(basename "$target")\$" || true; } \
+        | sort -u)"
+    printf '%s\n' "$result"
+}
+
+_bundle_target() {
+    local target="$1"
+    local deps
+    deps="$(_external_deps "$target")"
+    [ -z "$deps" ] && return 0
+    # IMPORTANT: every loop variable that survives across a recursive
+    # _bundle_target call MUST be declared `local`. The `while read -r
+    # VAR` syntax does NOT auto-localize VAR — the recursive call's own
+    # `while read -r dep` would clobber the outer caller's `dep`, so
+    # after recursion returns, install_name_tool -change runs with an
+    # empty `dep` argument and silently no-ops (returning rc=0 with no
+    # error). That bug burned us 2026-05-23 — 7/21 references in
+    # aliceVision_cameraInit silently failed to rewrite, leaving
+    # `/opt/homebrew/...` leaks the user only saw after distribution.
+    local dep dep_name dest
+    while IFS= read -r dep; do
+        [ -z "$dep" ] && continue
+        dep_name="$(basename "$dep")"
+        dest="$LIB_DIR/$dep_name"
+        # First time we see this dep: copy + rewrite its own ID + recurse.
+        if [ ! -f "$dest" ]; then
+            if [ ! -f "$dep" ]; then
+                echo "  ! missing dep on host: $dep (referenced by $target)" >&2
+                continue
+            fi
+            cp "$dep" "$dest"
+            chmod u+w "$dest"
+            # Rewrite the lib's own install_name so dyld matches references.
+            install_name_tool -id "@executable_path/../lib/$dep_name" "$dest" 2>/dev/null || true
+            # Recurse: any non-system dep this lib depends on must also
+            # land in lib/ + get its references rewritten.
+            if ! _is_processed "$dep_name"; then
+                PROCESSED_LIBS+=("$dep_name")
+                _bundle_target "$dest"
+            fi
+        fi
+        # Rewrite the original reference in `target`. -change is idempotent.
+        install_name_tool -change "$dep" "@executable_path/../lib/$dep_name" "$target" 2>/dev/null || true
+    done <<< "$deps"
+}
+
+bundle_count=0
+for bin in "$APP/Contents/Resources/alicevision"/aliceVision_*; do
+    [ -f "$bin" ] && [ -x "$bin" ] || continue
+    _bundle_target "$bin"
+    bundle_count=$((bundle_count + 1))
+done
+
+n_libs=$(ls -1 "$LIB_DIR" 2>/dev/null | wc -l | tr -d ' ')
+echo "  bundled $n_libs dylibs across $bundle_count binaries"
+echo "  Resources/lib size: $(du -sh "$LIB_DIR" 2>/dev/null | awk '{print $1}')"
+
+# Re-sign every modified Mach-O with an ad-hoc signature. install_name_tool
+# invalidates the original codesignature, so macOS Gatekeeper SIGKILLs
+# the binary at launch (rc=137) unless we re-sign. Ad-hoc (-s -) is free
+# + works for local distribution; a real Developer ID identity is wired
+# in `scripts/codesign_macos_app.sh` for shippable .app bundles.
+echo "[3c] Ad-hoc resign of modified binaries + dylibs"
+codesign_count=0
+for f in "$APP/Contents/Resources/alicevision"/aliceVision_* \
+         "$LIB_DIR"/*.dylib; do
+    [ -f "$f" ] || continue
+    codesign --force --sign - "$f" 2>/dev/null || true
+    codesign_count=$((codesign_count + 1))
+done
+echo "  ad-hoc signed $codesign_count Mach-O files"
+
+# -------------------------------------------------------------------- #
 # 3. AI segmentation models
 # -------------------------------------------------------------------- #
 

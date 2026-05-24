@@ -41,6 +41,8 @@ PURE_PYTHON_NODES = frozenset({
     "CopyFiles",  # Meshroom framework node
     "ImportE57",  # LiDAR ingestion, pure-Python
     "Backdrop",  # Visual group, no compute
+    # Phase 3 Mac-native aggregator (no commandLine = aliceVision_*):
+    "ScenePreview",
     # Roma legacy nodes route to pyalicevision and are virtual:
     "RomaMatcher",
     "RomaSampler",

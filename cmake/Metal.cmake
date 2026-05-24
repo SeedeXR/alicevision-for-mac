@@ -86,11 +86,38 @@ else()
 endif()
 
 if(NOT METAL_COMPILER OR NOT EXISTS "${METAL_COMPILER}")
-    message(FATAL_ERROR "Metal compiler (`metal`) not found. Install Xcode "
-                        "and run `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`.")
+    message(WARNING "Metal compiler (`metal`) not found. Install Xcode "
+                    "and run `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`. "
+                    "Existing default.metallib (if present) will be used as-is; "
+                    "new MSL shader builds will fail.")
+    set(METAL_TOOLCHAIN_AVAILABLE OFF CACHE INTERNAL "Metal toolchain present")
+else()
+    set(METAL_TOOLCHAIN_AVAILABLE ON CACHE INTERNAL "Metal toolchain present")
 endif()
+# Xcode 26+ merged `metallib` functionality into `metal`. The separate
+# `metallib` binary no longer ships with the Apple toolchain. Mac builds
+# without it; on older Xcode versions the variable may still be set.
 if(NOT METALLIB_LINKER OR NOT EXISTS "${METALLIB_LINKER}")
-    message(FATAL_ERROR "Metal linker (`metallib`) not found.")
+    message(STATUS "Metal linker (`metallib`) not found (Xcode 26+ ships only `metal`). "
+                   "Metal compilation will use `metal -o ...` directly.")
+endif()
+# Probe the Metal Toolchain by actually invoking the compiler. Xcode 26
+# requires a separate `xcodebuild -downloadComponent MetalToolchain`
+# step; without it, `metal --version` errors. We detect that here and
+# downgrade the toolchain availability flag so the `default.metallib`
+# build step can be skipped (the existing artifact is reused).
+if(METAL_TOOLCHAIN_AVAILABLE)
+    execute_process(COMMAND ${METAL_COMPILER} --version
+                    OUTPUT_QUIET ERROR_VARIABLE _metal_probe_err
+                    RESULT_VARIABLE _metal_probe_rc)
+    if(NOT _metal_probe_rc EQUAL 0 OR _metal_probe_err MATCHES "missing Metal Toolchain")
+        message(WARNING "Xcode Metal Toolchain not installed — run "
+                        "`xcodebuild -downloadComponent MetalToolchain` to enable "
+                        "MSL shader recompilation. Existing default.metallib at "
+                        "${CMAKE_BINARY_DIR}/default.metallib will be used as-is. "
+                        "Pure-C++ binary targets are unaffected.")
+        set(METAL_TOOLCHAIN_AVAILABLE OFF CACHE INTERNAL "Metal toolchain present" FORCE)
+    endif()
 endif()
 
 message(STATUS "Metal compiler : ${METAL_COMPILER}")
@@ -128,6 +155,25 @@ function(av_compile_metal_library)
     endif()
     if(NOT MTL_STANDARD)
         set(MTL_STANDARD "metal3.0")
+    endif()
+
+    # If the Metal Toolchain isn't installed (Xcode 26+ ships it as an
+    # opt-in download), declare an empty custom target. Adding non-Metal
+    # C++ binaries to the build then doesn't require shader
+    # recompilation. The existing default.metallib on disk (if any) is
+    # used at runtime by the consuming executable. If a user wants to
+    # rebuild MSL kernels, they install the toolchain via
+    # `xcodebuild -downloadComponent MetalToolchain` and re-run cmake.
+    if(NOT METAL_TOOLCHAIN_AVAILABLE)
+        add_custom_target(${MTL_TARGET} ALL
+            COMMENT "Skipping Metal compilation for '${MTL_TARGET}': "
+                    "Metal Toolchain not installed. Pre-built "
+                    "default.metallib (if present) will be used."
+        )
+        set_target_properties(${MTL_TARGET} PROPERTIES
+            AV_METALLIB_PATH "${CMAKE_CURRENT_BINARY_DIR}/${MTL_OUTPUT}"
+        )
+        return()
     endif()
 
     set(_air_files "")

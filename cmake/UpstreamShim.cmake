@@ -111,8 +111,68 @@ function(alicevision_add_interface interface_name)
     endif()
 endfunction()
 
-function(alicevision_swig_add_library)
-    # No-op.
+function(alicevision_swig_add_library module_name)
+    # Real implementation — wires the upstream .i interface files into a
+    # CPython extension module. Mirrors upstream's Helpers.cmake but
+    # drops the install() block (we wire imports differently — see
+    # Phase 13 / pyalicevision shim layout).
+    set(multipleValues SOURCES PUBLIC_LINKS PRIVATE_INCLUDE_DIRS)
+    cmake_parse_arguments(SWIG_MODULE "" "" "${multipleValues}" ${ARGN})
+
+    if(NOT AV_BUILD_PYALICEVISION)
+        return()
+    endif()
+
+    set_property(SOURCE ${SWIG_MODULE_SOURCES} PROPERTY CPLUSPLUS ON)
+    set_property(SOURCE ${SWIG_MODULE_SOURCES} PROPERTY SWIG_MODULE_NAME ${module_name})
+
+    swig_add_library(${module_name}
+        TYPE MODULE
+        LANGUAGE python
+        SOURCES ${SWIG_MODULE_SOURCES}
+    )
+
+    # global.i has an #ifdef LINUXPLATFORM branch that defines size_t
+    # correctly for UNIX (where size_t == unsigned long). The #else
+    # branch defines it as unsigned long long, which mismatches darwin's
+    # __darwin_size_t and produces typedef-redefinition errors. macOS
+    # qualifies as UNIX so we want LINUXPLATFORM defined here too —
+    # this matches upstream's own Helpers.cmake.
+    set_property(TARGET ${module_name}
+        PROPERTY SWIG_COMPILE_OPTIONS -doxygen -DLINUXPLATFORM)
+
+    target_include_directories(${module_name}
+        PRIVATE ${SWIG_MODULE_PRIVATE_INCLUDE_DIRS}
+    )
+    set_property(TARGET ${module_name}
+        PROPERTY SWIG_USE_TARGET_INCLUDE_DIRECTORIES ON)
+    set_property(TARGET ${module_name}
+        PROPERTY COMPILE_OPTIONS -std=c++20)
+
+    # Apple linker rejects unresolved Python symbols at link time for
+    # MODULE-type targets; -undefined dynamic_lookup defers resolution
+    # to load time (the interpreter provides the symbols).
+    set_property(TARGET ${module_name}
+        PROPERTY LINK_OPTIONS -undefined dynamic_lookup)
+
+    target_link_libraries(${module_name}
+        PUBLIC ${SWIG_MODULE_PUBLIC_LINKS}
+    )
+
+    # Stage both the binary _<name>.so and the SWIG-generated <name>.py
+    # in build/pyalicevision_native/. The pyalicevision __init__.py
+    # detects this directory at import time and prepends it to the
+    # package's __path__ — so when present, `from pyalicevision import hdr`
+    # resolves to the real binding; otherwise it falls back to the
+    # pure-Python stubs in src/python_shim/pyalicevision/.
+    set_target_properties(${module_name} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/pyalicevision_native"
+    )
+    add_custom_command(TARGET ${module_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_BINARY_DIR}/${module_name}.py"
+            "${CMAKE_BINARY_DIR}/pyalicevision_native/${module_name}.py"
+    )
 endfunction()
 
 # alicevision_add_software(<name> SOURCE <main.cpp> FOLDER <id> LINKS ...)

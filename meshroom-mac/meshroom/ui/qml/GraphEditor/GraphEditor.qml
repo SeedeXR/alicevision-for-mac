@@ -172,7 +172,16 @@ Item {
         acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
         drag.threshold: 0
         drag.smoothed: false
-        cursorShape: drag.target == draggable ? Qt.ClosedHandCursor : removingEdges ? Qt.CrossCursor : Qt.ArrowCursor
+        // Figma/Miro-style hand cursor on the empty canvas so the user
+        // immediately knows "you can click and drag here to pan". The
+        // grabbing cursor appears while a pan drag is active; cross
+        // cursor while an edge-removal selection is in progress.
+        cursorShape: {
+            if (drag.target === draggable) return Qt.ClosedHandCursor
+            if (removingEdges) return Qt.CrossCursor
+            if (nodeSelectionBox.active) return Qt.CrossCursor
+            return Qt.OpenHandCursor
+        }
 
         // Trackpad pinch-zoom (macOS Apple Silicon). PinchHandler is a
         // Qt 6 Pointer Handler — coexists with MouseArea (no exclusivity
@@ -202,24 +211,42 @@ Item {
         }
 
         onWheel: function(wheel) {
-            // On Apple Silicon trackpads, two-finger drag generates wheel
-            // events with `pixelDelta` populated (and no Ctrl modifier).
-            // We treat those as a pan gesture; only mouse-wheel scrolls
-            // (which have angleDelta but a zero pixelDelta) or explicit
-            // Ctrl+scroll perform zoom.
-            var isTrackpadPan =
-                (wheel.modifiers & Qt.ControlModifier) === 0
-                && (wheel.pixelDelta.x !== 0 || wheel.pixelDelta.y !== 0)
-                && Math.abs(wheel.pixelDelta.y) < 50  // sanity: pinch sends large deltas
+            // Decision tree for routing wheel events on macOS:
+            //
+            //   pixelDelta populated, no Ctrl   → PAN
+            //     (trackpad two-finger swipe, Magic Mouse single-finger
+            //      swipe, momentum-scroll frames)
+            //   pixelDelta populated, with Ctrl → ZOOM
+            //     (Magic Mouse / trackpad with Ctrl held — universal
+            //      modifier for "zoom this gesture")
+            //   only angleDelta populated      → ZOOM
+            //     (traditional mouse scroll wheel — no pan capability)
+            //
+            // PINCH gestures (trackpad two-finger spread) route through
+            // PinchHandler instead, so we don't need a magnitude cap here.
+            // An earlier `< 50` cap was a misguided pinch heuristic that
+            // also rejected fast Magic Mouse swipes — removed 2026-05-23.
+            var hasPixelDelta = wheel.pixelDelta.x !== 0 || wheel.pixelDelta.y !== 0
+            var ctrlHeld = (wheel.modifiers & Qt.ControlModifier) !== 0
 
-            if (isTrackpadPan) {
+            if (hasPixelDelta && !ctrlHeld) {
+                // Pan the canvas. Content follows the finger (Figma-style).
                 draggable.x += wheel.pixelDelta.x
                 draggable.y += wheel.pixelDelta.y
                 workspaceMoved()
                 return
             }
 
-            var zoomFactor = wheel.angleDelta.y > 0 ? factor : 1 / factor
+            // Zoom — derive direction from whichever delta is meaningful.
+            // Magic Mouse + Ctrl emits pixelDelta with no angleDelta on
+            // some configurations, so we fall back to pixelDelta.y if
+            // angleDelta.y is zero.
+            var zoomSignal = wheel.angleDelta.y !== 0
+                             ? wheel.angleDelta.y
+                             : wheel.pixelDelta.y
+            if (zoomSignal === 0)
+                return   // pure horizontal scroll with Ctrl — ignore
+            var zoomFactor = zoomSignal > 0 ? factor : 1 / factor
             var scale = draggable.scale * zoomFactor
             scale = Math.min(Math.max(minZoom, scale), maxZoom)
             if (draggable.scale == scale)
@@ -241,18 +268,45 @@ Item {
         }
 
         onPressed: function(mouse) {
+            // Figma/Miro-style canvas navigation (2026-05-23 UX fix):
+            //
+            //   LeftButton + no modifier   → PAN the canvas (drag to move
+            //                                  to a different node)
+            //   LeftButton + Shift / Ctrl  → start node-selection box
+            //                                  (Shift = add, Ctrl = remove)
+            //   LeftButton + Alt           → PAN (kept for muscle memory)
+            //   MiddleButton               → PAN (legacy default)
+            //   LeftButton + Ctrl + Alt    → start edge-removal selection
+            //
+            // The "click empty canvas to deselect" behaviour stays — fires
+            // BEFORE we set drag.target so the deselect still happens.
             if (mouse.button != Qt.MiddleButton && mouse.modifiers == Qt.NoModifier) {
                 uigraph.clearNodeSelection()
             }
-            if (mouse.button == Qt.LeftButton && (mouse.modifiers == Qt.NoModifier || mouse.modifiers & (Qt.ControlModifier | Qt.ShiftModifier))) {
-                nodeSelectionBox.startSelection(mouse)
-            }
-            if (mouse.button == Qt.MiddleButton || (mouse.button == Qt.LeftButton && mouse.modifiers & Qt.AltModifier)) {
-                drag.target = draggable // start drag
-            }
-            if (mouse.button == Qt.LeftButton && (mouse.modifiers & Qt.ControlModifier) && (mouse.modifiers & Qt.AltModifier)) {
+
+            // Edge-removal selection — most specific modifier combo, check first.
+            if (mouse.button == Qt.LeftButton
+                    && (mouse.modifiers & Qt.ControlModifier)
+                    && (mouse.modifiers & Qt.AltModifier)) {
                 edgeSelectionLine.startSelection(mouse)
                 removingEdges = true
+                return
+            }
+
+            // Node-selection rectangle — Shift or Ctrl (additive / subtractive).
+            if (mouse.button == Qt.LeftButton
+                    && (mouse.modifiers & (Qt.ControlModifier | Qt.ShiftModifier))) {
+                nodeSelectionBox.startSelection(mouse)
+                return
+            }
+
+            // Pan — Middle, Alt+Left, OR plain Left (Figma-style default).
+            if (mouse.button == Qt.MiddleButton
+                    || (mouse.button == Qt.LeftButton
+                        && (mouse.modifiers == Qt.NoModifier
+                            || (mouse.modifiers & Qt.AltModifier)))) {
+                drag.target = draggable
+                return
             }
         }
 
