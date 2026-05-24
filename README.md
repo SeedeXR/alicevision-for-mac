@@ -52,9 +52,13 @@ Native Apple Silicon Metal port of [AliceVision](https://alicevision.org/)
   Drives upstream PySide6 Meshroom against the arm64 binaries. End-to-end
   verified on Monstree mini3 + full datasets. The prior native SwiftUI
   prototype was decommissioned in May 2026.
-- **Self-contained `.app` packaging** at `scripts/package_macos_app.sh`
-  (mini-dylibbundler + auto ad-hoc resign), `scripts/codesign_macos_app.sh`
-  (Developer ID path), `scripts/make_dmg.sh` (1.4 GB compressed DMG).
+- **Self-contained `.app` packaging** — one-shot orchestrator
+  `scripts/build_dmg.sh` runs the full source-to-DMG pipeline (cmake
+  configure → cmake build → bundle dylibs → codesign → DMG) with
+  per-step logging to `build/release/logs/` and a `SUMMARY.md`.
+  Constituent scripts: `scripts/package_macos_app.sh` (mini-dylibbundler
+  + auto ad-hoc resign), `scripts/codesign_macos_app.sh` (Developer ID
+  path), `scripts/make_dmg.sh` (1.4 GB compressed DMG).
 - **Native plugin system** at `plugins/` — third parties can ship AI
   extensions via a self-contained `plugin.json` manifest. AI segmentation
   is the reference implementation:
@@ -93,6 +97,40 @@ End-to-end smoke test on the Monstree mini dataset (3 photos):
 ```bash
 bash scripts/run_meshroom.sh mini3   # → meshroom-mac-out/result/texturedMesh.obj
 ```
+
+### Build a distributable DMG (one shot)
+
+`scripts/build_dmg.sh` orchestrates the full source → DMG pipeline
+(cmake configure → cmake build → package `.app` → codesign → DMG) with
+per-step live logging to `build/release/logs/` and a final `SUMMARY.md`.
+
+```bash
+# Default: ad-hoc signed DMG with ULMO (LZMA) compression — best size.
+bash scripts/build_dmg.sh
+
+# Production: Apple Developer ID signed (notarize the DMG afterward).
+bash scripts/build_dmg.sh --identity "Developer ID Application: NAME (TEAMID)"
+
+# Incremental: cmake already configured + binaries already built — only repackage.
+bash scripts/build_dmg.sh --skip-cmake-configure --skip-cmake-build
+
+# Faster build / different size/speed tradeoff:
+bash scripts/build_dmg.sh --compression udzo      # legacy zlib (fastest)
+bash scripts/build_dmg.sh --compression ulfo      # lzfse (fast + smaller than udzo)
+```
+
+**Compression** (passed through to `scripts/make_dmg.sh`):
+
+| Flag | Format | Size vs UDZO | Time | Min macOS |
+|---|---|---|---|---|
+| `--compression udzo` | UDIF zlib level 1 (legacy default) | baseline | 1× | 10.0 |
+| `--compression udzo-max` | UDIF zlib level 9 | -10 % | 2× | 10.0 |
+| `--compression ulfo` | UDIF lzfse | -11 % | 1× | 10.11 |
+| `--compression ulmo` *(default)* | UDIF lzma | **-34 %** | 4× | 10.15 |
+
+Benchmarked on a 186 MB fixture of Mach-O binaries + Homebrew dylibs (representative of `Meshroom.app` content). The Mac port targets macOS 14+ so ULMO's 10.15 requirement is irrelevant. Apple's notary service accepts all four formats. After creation, `scripts/make_dmg.sh` always runs `hdiutil verify` to validate the image's checksums; if the chosen format fails for any reason the script auto-falls back to UDZO and warns to stderr.
+
+Output: `build/release/Meshroom.app` (~2.7 GB) + `build/release/Meshroom-<version>-arm64.dmg` (~0.9 GB with ULMO, was ~1.4 GB with UDZO). Inspect `build/release/SUMMARY.md` for per-step timings, dylib counts, compression used, and reproduction flags. On failure the script exits non-zero and echoes the last 30 lines of the failing step's log.
 
 ---
 

@@ -216,3 +216,94 @@ cmake --build build
 
 There are no generated files outside `build/`. Even the `l1.cpp` patch lands
 in `build/upstream-patched/`, not in source. `upstream/` stays read-only.
+
+## One-shot DMG build (`scripts/build_dmg.sh`)
+
+For producing a distributable `.app` + DMG without driving each step
+yourself, the repo ships a single orchestrator:
+
+```bash
+bash scripts/build_dmg.sh
+```
+
+Runs five steps with **live + per-step file logging** to
+`build/release/logs/<NN>_<step>.log`:
+
+1. `cmake configure` with `-DAV_BUILD_UPSTREAM=ON -DAV_BUILD_UPSTREAM_DEPTHMAP=ON -DAV_BUILD_PYALICEVISION=ON`.
+2. `cmake --build build -j$(sysctl -n hw.ncpu)`.
+3. `scripts/package_macos_app.sh` → `build/release/Meshroom.app`.
+4. `scripts/codesign_macos_app.sh` (ad-hoc by default; pass `--identity` for Developer ID).
+5. `scripts/make_dmg.sh` → `build/release/Meshroom-<version>-arm64.dmg`.
+
+After step 2 the script asserts at least 50 of the expected 60
+`aliceVision_*` binaries built; after step 3 it sweeps the bundle with
+`otool -L | grep /opt/homebrew/` and warns if any leaked references
+remain. Any step that exits non-zero halts the pipeline and echoes the
+last 30 lines of its log to stderr.
+
+Final output is `build/release/SUMMARY.md` with timings, file sizes,
+dylib counts, and the resolved flags — so the build is reproducible.
+
+### Common flags
+
+| Flag | When to use |
+|---|---|
+| `--identity "Developer ID Application: NAME (TEAMID)"` | Production builds. Defaults to `-` (ad-hoc). |
+| `--skip-cmake-configure` | Re-using an already-configured `build/`. |
+| `--skip-cmake-build` | Re-packaging without rebuilding the binaries. |
+| `--skip-package` | `.app` already at `build/release/Meshroom.app`. |
+| `--skip-codesign` | Signing handled externally. |
+| `--clean` | Remove old `Meshroom.app` and DMGs before starting. |
+| `--jobs N` | Ninja parallelism (default: `hw.ncpu`). |
+| `--compression {udzo,udzo-max,ulfo,ulmo}` | DMG compression. Default `ulmo` (best size, ~34 % smaller than legacy). |
+
+### DMG compression
+
+The orchestrator passes `--compression` through to
+`scripts/make_dmg.sh`, which dispatches to `hdiutil create -format`.
+Defaults to ULMO based on the benchmark below.
+
+#### Benchmark (186 MB fixture: 60 aliceVision_* binaries + Homebrew dylibs)
+
+| `--compression` | `hdiutil` flags | DMG size | vs UDZO | Wall-time | Min macOS |
+|---|---|---:|---:|---:|---:|
+| `udzo` | `-format UDZO` (zlib L1) | 69.2 MB | baseline | 6 s | 10.0 |
+| `udzo-max` | `-format UDZO -imagekey zlib-level=9` | 62.5 MB | **-9.7 %** | 13 s | 10.0 |
+| `ulfo` | `-format ULFO` (lzfse) | 61.2 MB | **-11.5 %** | 6 s | 10.11 |
+| `ulmo` *(default)* | `-format ULMO` (lzma) | 45.7 MB | **-33.9 %** | 24 s | 10.15 |
+
+ULMO wins decisively on size and the Mac port already requires
+macOS 14+, so 10.15's ULMO requirement is irrelevant. On the full ~2.7
+GB `Meshroom.app` bundle this projects to a ~0.9 GB DMG vs the ~1.4 GB
+the old UDZO default produced — a ~470 MB saving per release.
+
+#### Safety: post-build verification + auto-fallback
+
+`scripts/make_dmg.sh` always runs `hdiutil verify <dmg>` after creation
+to validate checksums + that the image mounts. If the chosen format
+fails either create or verify, the script automatically retries with
+UDZO (the legacy-safe default that works back to macOS 10.0) and prints
+a warning to stderr rather than leaving the operator empty-handed. The
+DMG name and path are preserved across the fallback, and the orchestrator
+records the actually-used compression in `build/release/SUMMARY.md` so
+post-mortems are easy. Use `--no-verify` on `make_dmg.sh` to skip the
+verify step (not recommended for distribution builds).
+
+#### Notarization compatibility
+
+All four UDIF formats above are accepted by Apple's `notarytool` and
+`stapler`. ULMO has been GA since macOS 10.15 Catalina (2019) and is
+well-tested in production distribution workflows.
+
+### After: notarize the DMG (Developer ID only)
+
+```bash
+xcrun notarytool submit build/release/Meshroom-*.dmg \
+    --apple-id you@example.com --team-id TEAMID \
+    --password APP-SPECIFIC-PWD --wait
+xcrun stapler staple build/release/Meshroom-*.dmg
+```
+
+`notarytool` wants the DMG, not the `.app`. The staple writes the
+notarization ticket into the DMG so the user's Mac can verify it
+offline.
